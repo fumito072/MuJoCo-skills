@@ -14,3 +14,6 @@ MUJOCO_LOG.TXT
 # Editor
 .vscode/
 .idea/
+
+# Robot models — fetched by mujoco-env-setup (kept out of git to keep `npx skills add` fast)
+models/

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "name": "mujoco-skills",
+  "description": "Mac-native, NVIDIA-free MuJoCo robot-behavior skills for Unitree GO2 (quadruped) and G1 (humanoid): setup, viewer, offscreen render, model-based & pretrained-policy control, and obstacle navigation. 100% local on Apple Silicon, no GPU.",
+  "skills": [
+    ".agents/skills/mujoco-env-setup",
+    ".agents/skills/mujoco-viewer",
+    ".agents/skills/mujoco-offscreen-render",
+    ".agents/skills/mujoco-controller-baselines",
+    ".agents/skills/mujoco-pretrained-deploy",
+    ".agents/skills/mujoco-obstacle-navigation"
+  ]
+}

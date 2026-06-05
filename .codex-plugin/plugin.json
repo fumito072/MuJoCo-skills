@@ -1,0 +1,15 @@
+{
+  "name": "mujoco-skills",
+  "version": "0.1.0",
+  "description": "Mac-native, NVIDIA-free MuJoCo robot-behavior skills for Unitree GO2 & G1 — setup, viewer, offscreen render, model-based & pretrained control, obstacle navigation. 100% local on Apple Silicon.",
+  "author": "Colapis MuJoCo-skills",
+  "license": "Apache-2.0",
+  "skills": [
+    ".agents/skills/mujoco-env-setup",
+    ".agents/skills/mujoco-viewer",
+    ".agents/skills/mujoco-offscreen-render",
+    ".agents/skills/mujoco-controller-baselines",
+    ".agents/skills/mujoco-pretrained-deploy",
+    ".agents/skills/mujoco-obstacle-navigation"
+  ]
+}
