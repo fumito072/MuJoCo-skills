@@ -17,3 +17,6 @@ MUJOCO_LOG.TXT
 
 # Robot models — fetched by mujoco-env-setup (kept out of git to keep `npx skills add` fast)
 models/
+
+# VLA experiment venv (heavy, not committed)
+.venv-vla/
