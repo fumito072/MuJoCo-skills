@@ -25,7 +25,9 @@ N, FOV, RMAX, SAFE = 21, np.deg2rad(200), 3.5, 0.9
 ANGLES = np.array([-FOV/2 + FOV*i/(N-1) for i in range(N)])
 GOAL = np.array([3.4, 0.0])
 OBST_GROUP = 4
-STATIC = [(2.6, -0.6, 0.22)]       # one static off to the side
+# Scene tuned to what the CPG trot can handle stably; harder/faster scenes tip it over
+# (the disturbance-robust fix is convex-MPC, not this open-loop gait).
+STATIC = [(2.5, -0.6, 0.22)]       # one static off to the side
 MOVER_X = 1.7                      # the moving obstacle patrols in y at this x
 
 
@@ -52,10 +54,17 @@ def yaw_of(d):
     return np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
 
 
-def make_planner(m, d):
+def make_planner(m, d, wz_slew=0.02, wz_max=0.6):
+    """Robustified planner: the raw VFH steer is rate-limited (slew) so the open-loop GO2 trot
+    never gets a sudden large turn command — abrupt wz is what tipped it over. This keeps the
+    quadruped stable while still letting it commit firmer turns than the ultra-gentle version."""
     gg = np.zeros(6, dtype=np.uint8); gg[OBST_GROUP] = 1
     gid = np.zeros(1, dtype=np.int32)
-    st = {"boxed": 0}
+    st = {"boxed": 0, "wz": 0.0}
+
+    def smooth_wz(target):
+        st["wz"] += float(np.clip(target - st["wz"], -wz_slew, wz_slew))
+        return float(np.clip(st["wz"], -wz_max, wz_max))
 
     def planner(_t=0.0):
         origin = np.array([d.qpos[0], d.qpos[1], 0.25]); yaw = yaw_of(d)
@@ -75,11 +84,11 @@ def make_planner(m, d):
         free = np.where(~blk)[0]
         if len(free) == 0:                    # boxed in (e.g. mover right in front): turn in place to find a gap
             st["boxed"] += 1
-            return [0.0, 0.0, 0.6]
+            return [0.05, 0.0, smooth_wz(0.6)]
         st["boxed"] = 0
         best = free[np.argmin(np.abs(ANGLES[free] - goal_dir))]
-        vx = 0.24 * float(np.clip(rng[best] / RMAX, 0.35, 1.0))
-        return [vx, 0.0, float(np.clip(1.0 * ANGLES[best], -0.4, 0.4))]   # gentler turns keep GO2 stable
+        vx = 0.26 * float(np.clip(rng[best] / RMAX, 0.35, 1.0))
+        return [vx, 0.0, smooth_wz(1.4 * ANGLES[best])]   # firm target, but slew-limited so GO2 stays stable
     return planner
 
 
@@ -105,7 +114,7 @@ def main():
 
     def log(dd):
         # move the mocap obstacle: patrol in y across the path
-        dd.mocap_pos[0] = [MOVER_X, 0.38 * np.sin(0.7 * st["k"] * m.opt.timestep), 0.35]
+        dd.mocap_pos[0] = [MOVER_X, 0.4 * np.sin(0.7 * st["k"] * m.opt.timestep), 0.35]
         if np.hypot(GOAL[0]-dd.qpos[0], GOAL[1]-dd.qpos[1]) < 0.3:
             reached[0] = True
         if renderer is not None and st["k"] % every == 0:
