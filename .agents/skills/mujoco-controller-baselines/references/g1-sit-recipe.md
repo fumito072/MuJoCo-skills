@@ -55,6 +55,21 @@ or an online closed-loop CoM/capture-point regulator.
 - `g1_sit.py --mode hold` → stable floor-sit POSE (verified).
 - **`g1_sitdown.py` → stand → floor-sit descent (CEM-optimized, WORKS: `SAT DOWN ON FLOOR ✓`).**
 - `g1_sitdown_optimize.py` → re-run/retune the search (e.g. after a hardware feedback round).
-- **Next:** get-up (floor-sit → stand) is the reverse hard transition — optimize it the same way
-  (likely a separate trajectory). Then chair-sitting (approach + sit onto a raised surface) builds
-  on these. The CEM harness generalizes to all of them.
+## Get-up (floor-sit → stand): the asymmetric hard case (NOT solved by open-loop CEM)
+Sit-down and get-up are NOT symmetric. **Sit-down: solved** (gravity assists the descent).
+**Get-up: the same CEM harness does NOT crack it** — three settings (slow quasi-static T=4 +
+binary cost; slow + continuous cost + reversed-sit-down seed; fast T=2 for momentum) all topple
+(robot collapses forward, pelvis stays ~0.06; best cost plateaus). Rising from a legs-extended
+floor sit is a multi-phase, momentum/contact-dependent maneuver (sit up → fold to a crouch →
+shift CoM over the feet → push up, often using the hands on the ground) that 2-knot open-loop
+position trajectories can't express. This is a known-hard humanoid problem (RL "getup" tasks).
+- `g1_getup_optimize.py` is kept as a starting harness (extend: more knots, arms-on-ground push,
+  contact scheduling, or a dynamic optimizer like mjpc).
+- **Reliable path = a pretrained getup policy** (mirrors the WALK solution — check MuJoCo
+  Playground / Unitree humanoid getup checkpoints).
+- **Important:** basic standing-up is ALREADY covered by `g1_squat.py` (sit-to-stand from a
+  squat) and `g1_stand.py`. Only deep-floor-sit get-up is the open frontier.
+
+Chair-sitting (the final goal: approach a chair and sit onto a raised surface) builds on the
+sit-down approach + a scene object; the get-up-from-chair is easier than floor get-up (higher seat
+→ feet already under the body), so it may be CEM-tractable even though floor get-up is not.
