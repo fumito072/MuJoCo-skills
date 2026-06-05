@@ -7,8 +7,8 @@ description: >-
   body velocity command (vx, vy, yaw-rate) toward a goal, and that command drives any
   velocity-tracking locomotion layer — demonstrated steering the pretrained Unitree G1 walk
   around obstacles to a goal. Use this to make a robot navigate around obstacles in simulation;
-  the perception→locomotion coupling is just the velocity command, so the same planner rides
-  G1 walk today and a steerable GO2 trot tomorrow.
+  the perception→locomotion coupling is just the velocity command, so the SAME planner drives both
+  the pretrained G1 walk and the steerable GO2 trot (both demonstrated).
 license: Apache-2.0
 compatibility: >-
   Requires Python 3.10+, mujoco>=3.9, numpy (+ torch & the mujoco-pretrained-deploy G1 walk for
@@ -44,11 +44,14 @@ code can later ride a steerable GO2 trot or any other gait that tracks `(vx, vy,
 
 ## Instructions
 ```bash
-# G1 walks around obstacles to the goal (headless metrics)
-python scripts/g1_nav_demo.py --secs 16
-# render the navigation to a GIF (obstacles in geom group 4, goal group 5)
+# G1 humanoid (pretrained walk) navigates obstacles to the goal
 python scripts/g1_nav_demo.py --video assets/g1_nav.gif --secs 13
+# GO2 quadruped (model-based steerable trot) — SAME planner, different gait
+python scripts/go2_nav_demo.py --video assets/go2_nav.gif --secs 20
 ```
+The GO2 trot is made steerable by `mujoco-controller-baselines`' `go2_trot.trot(m, d, cmd, ...)`:
+`vx` scales stride, `wz` turns via a left/right stride differential (signed to match the G1 walk
+convention: `wz>0` = CCW), so one planner fits both robots.
 Tune in `g1_nav_demo.py`: `OBSTACLES` (x, y, kind, size), `GOAL`, fan `N`/`FOV`/`RMAX`, and the
 planner's `SAFE` clearance. Add obstacles by appending to `OBSTACLES` (they are injected into the
 scene via `mujoco.MjSpec`; the robot model is untouched). Runtime-movable obstacles can use mocap
@@ -56,6 +59,7 @@ bodies. **Rendering note:** obstacle/goal geom groups must be enabled in the `Mj
 (`vopt.geomgroup[4]=vopt.geomgroup[5]=1`) or they are invisible (groups >2 are off by default).
 
 ![G1 obstacle navigation](assets/g1_nav.gif)
+![GO2 obstacle navigation](assets/go2_nav.gif)
 
 ## Scope & honesty
 - ✅ Local on Mac, NVIDIA-free: geometric obstacle avoidance + goal-seeking on the G1 walk.

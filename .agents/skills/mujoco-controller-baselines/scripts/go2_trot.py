@@ -45,6 +45,34 @@ def foot_target(phase, h0, x_amp, lift, duty):
     return x_amp * (-1 + 2 * s), -h0 + lift * np.sin(np.pi * s)
 
 
+def trot(m, d, cmd, steps, freq=2.0, xamp=0.08, h0=0.26, lift=0.10, duty=0.5,
+         kp=80.0, kd=3.0, turn_gain=0.7, vx_nom=0.23, log=None):
+    """Steerable GO2 trot. `cmd` is [vx, vy, wz] or a callable(t)->[vx,vy,wz].
+    vx scales stride length; wz turns via a left/right stride differential (skid-steer-like).
+    This is the velocity-command interface an obstacle-avoidance planner drives.
+    """
+    flim = m.actuator_ctrlrange[:, 1].copy()
+    for c in range(steps):
+        t = c * m.opt.timestep
+        vx, vy, wz = (cmd(t) if callable(cmd) else cmd)
+        gphase = t * freq
+        stride = xamp * float(np.clip(abs(vx) / vx_nom, 0.15, 1.4))
+        fwd = 1.0 if vx >= 0 else -1.0
+        q_des = np.zeros(12)
+        for i, leg in enumerate(LEGS):
+            side = 1.0 if leg in ("FL", "RL") else -1.0      # left vs right
+            # wz>0 => CCW/left (matches the G1 walk convention so one planner fits both):
+            xa = stride * (1.0 - side * turn_gain * wz)       # differential -> yaw
+            x, z = foot_target(gphase + PHASE_OFFSET[leg], h0, fwd * xa, lift, duty)
+            thigh, calf = leg_ik(x, z)
+            q_des[3 * i + 1] = thigh
+            q_des[3 * i + 2] = calf
+        d.ctrl[:] = np.clip(kp * (q_des - d.qpos[7:]) - kd * d.qvel[6:], -flim, flim)
+        mujoco.mj_step(m, d)
+        if log is not None:
+            log(d)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scene", nargs="?", default="/tmp/mjm/unitree_go2/scene.xml")
