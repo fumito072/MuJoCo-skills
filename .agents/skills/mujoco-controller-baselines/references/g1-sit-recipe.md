@@ -70,6 +70,26 @@ position trajectories can't express. This is a known-hard humanoid problem (RL "
 - **Important:** basic standing-up is ALREADY covered by `g1_squat.py` (sit-to-stand from a
   squat) and `g1_stand.py`. Only deep-floor-sit get-up is the open frontier.
 
-Chair-sitting (the final goal: approach a chair and sit onto a raised surface) builds on the
-sit-down approach + a scene object; the get-up-from-chair is easier than floor get-up (higher seat
-→ feet already under the body), so it may be CEM-tractable even though floor get-up is not.
+## Chair-sitting: also a support-transfer problem (NOT the easy win we assumed)
+We expected chair-sit to be EASIER than floor-sit (shallow descent onto a raised seat). It is
+HARDER in open-loop control, verified directly: a stable squat (`g1_squat`, never topples) tips
+over **the instant the buttocks contact the seat** — the contact force is a perturbation the
+foot-balanced squat can't absorb. Plus the raised seat is a small target the drifting base keeps
+missing/penetrating. CEM (`g1_chair_sitdown_optimize.py`, `g1_chair.py` builds a chaired model via
+MjSpec) drives the cost down but stays toppled. So chair sit-down is the same hard SUPPORT-TRANSFER
+class as floor get-up. (`g1_chair_sitdown_optimize.py` kept with honest STATUS.)
+
+## Which humanoid transitions are open-loop-tractable (synthesis)
+| transition | open-loop (CEM/script) | why |
+|---|---|---|
+| stand (hold) | ✅ | static, servos hold |
+| squat sit-to-stand (`g1_squat`) | ✅ | up/down on feet, NO support transfer |
+| **floor sit-DOWN** (`g1_sitdown`) | ✅ (CEM) | floor = large forgiving target, long-sit end-pose intrinsically stable, gravity assists |
+| walk (`g1_walk`) | ✅ (pretrained) | policy encodes balance |
+| **floor get-UP** | ❌ | rise against gravity, multi-phase support transfer |
+| **chair sit-down / get-up** | ❌ | seat-contact perturbs foot balance → topples; small raised target |
+**Rule of thumb:** open-loop CEM works when there's NO balance-critical support transfer onto a
+small/raised support and gravity assists. The hard support-transfer transitions (get-up, chair)
+need a **pretrained policy** (mirrors WALK — check MuJoCo Playground/Unitree getup&sit) or
+**closed-loop CoM/ZMP control**. Note the robot already has a solid repertoire without these:
+stand, squat sit-to-stand, walk (+ steer), and floor sit-down.
