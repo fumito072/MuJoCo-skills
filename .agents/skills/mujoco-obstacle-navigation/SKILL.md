@@ -48,6 +48,8 @@ code can later ride a steerable GO2 trot or any other gait that tracks `(vx, vy,
 python scripts/g1_nav_demo.py --video assets/g1_nav.gif --secs 13
 # GO2 quadruped (model-based steerable trot) — SAME planner, different gait
 python scripts/go2_nav_demo.py --video assets/go2_nav.gif --secs 20
+# a MOVING (mocap) obstacle + a boxed-in turn-to-find-a-gap recovery:
+python scripts/go2_nav_dynamic.py --video assets/go2_nav_dynamic.gif --secs 26
 ```
 The GO2 trot is made steerable by `mujoco-controller-baselines`' `go2_trot.trot(m, d, cmd, ...)`:
 `vx` scales stride, `wz` turns via a left/right stride differential (signed to match the G1 walk

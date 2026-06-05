@@ -57,6 +57,8 @@ Validates the control loop. kp≈60, kd≈3 hold the stance in sim (Unitree's re
 ### 3. Trot forward (CPG foot trajectory + 2-link IK + PD)
 ```bash
 python scripts/go2_trot.py /path/to/scene.xml --secs 8
+# straight line / hold a heading (closed-loop): pass go2_trot.heading_cmd(d, speed, heading)
+#   as trot()'s cmd — closed-loop yaw nulls the open-loop drift (lateral 0.45 m -> 0.03 m).
 # tuned default: freq2.0 xamp0.08 h0=0.26 lift0.10 duty0.5 kp80 -> ~0.23 m/s forward
 ```
 Pipeline per 500 Hz step: global phase → per-leg foot target (stance push-back / swing lift)

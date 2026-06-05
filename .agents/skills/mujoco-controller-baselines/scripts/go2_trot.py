@@ -73,6 +73,21 @@ def trot(m, d, cmd, steps, freq=2.0, xamp=0.08, h0=0.26, lift=0.10, duty=0.5,
             log(d)
 
 
+def heading_cmd(d, speed=0.3, heading=0.0, kyaw=2.5, wz_max=0.6):
+    """Closed-loop heading hold: corrects the open-loop trot's yaw drift so the GO2 walks a
+    straight line (or any commanded heading) at a commanded forward speed. Pass this as the
+    `cmd` to trot(); it reads the live MjData yaw each step and steers wz to null the error.
+    """
+    def yaw(dd):
+        w, x, y, z = dd.qpos[3:7]
+        return np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+
+    def cmd(_t=0.0):
+        err = (heading - yaw(d) + np.pi) % (2*np.pi) - np.pi
+        return [speed, 0.0, float(np.clip(kyaw * err, -wz_max, wz_max))]
+    return cmd
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scene", nargs="?", default="/tmp/mjm/unitree_go2/scene.xml")

@@ -52,6 +52,8 @@ model used by `mujoco-controller-baselines` (`g1_stand.py`, `g1_squat.py`). Arms
 ```bash
 # G1 walks forward (default cmd vx=0.5)
 python scripts/g1_walk.py --secs 6 --vx 0.5            # -> RESULT: WALKS ✓ (~0.45 m/s)
+# robustness: 2 min through a changing command schedule + fall detection
+python scripts/g1_walk_stress.py --secs 120           # -> STAYED UPRIGHT ✓ (max tilt ~6 deg)
 # steer with the velocity command (this is the obstacle-avoidance hook)
 python scripts/g1_walk.py --secs 6 --vx 0.3 --wz 0.5   # turn while walking
 python scripts/g1_walk.py --secs 6 --vy -0.3           # sidestep right
