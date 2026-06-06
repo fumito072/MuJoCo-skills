@@ -46,6 +46,25 @@ python3 -m venv .venv-vla
 ```
 (Separate venv because lerobot pins a newer torch; it must not disturb the mujoco-skills env.)
 
+## Stage A (working): language & VOICE → navigation, in sim, NVIDIA-free
+A typed or **spoken** instruction drives the pretrained G1 walk in MuJoCo — no VLA action
+transfer, no IK, no fine-tuning (safest first loop). Bilingual EN/JP keyword parser →
+heading-hold execution on the existing `(vx,vy,wz)` walk hook.
+```bash
+# text -> G1 navigates (EN or JP), render a GIF
+.venv-vla/bin/python scripts/language_nav.py --say "forward; turn left; forward; stop" --video assets/language_nav.gif
+.venv-vla/bin/python scripts/language_nav.py --say "前に進んで; 右を向いて; 進んで; 止まれ"
+
+# VOICE -> G1: Whisper (MLX, Apple-Silicon, NVIDIA-free) transcribes, then drives the G1
+.venv-vla/bin/pip install mlx-whisper sounddevice soundfile
+.venv-vla/bin/python scripts/voice_nav.py --mic 6 --run --video assets/voice_nav.gif   # speak into the mic
+.venv-vla/bin/python scripts/voice_nav.py --audio clip.wav --run                        # or from a file
+```
+Verified on M5 Max: a Japanese voice clip ("前に進んで、左を向いて、また進んで、止まれ") → Whisper
+(`mlx-community/whisper-large-v3-turbo`) transcribed it exactly → the G1 walked the path in sim,
+upright — 100% local, no NVIDIA. STT is just a text-in front-end to `language_nav.parse`. A small
+local LLM (MLX) can later replace the keyword parser for free-form language.
+
 ## Architecture — why our existing skills are already the right shape
 Every real G1 VLA stack (including NVIDIA's GR00T N1.7 + GEAR-SONIC) **decouples** the VLA
 (arm manipulation) from locomotion: the VLA emits ~6–14 DoF arm + gripper chunks at low Hz; a
@@ -75,7 +94,7 @@ separate controller handles the legs. That is exactly our split:
   client — not locally. No NVIDIA-free whole-body humanoid VLA exists yet.
 
 ## Roadmap (A→E)
-A. ✅ benchmark SmolVLA on Mac (done) + language→nav→walk bridge. B. arm IK manipulation on a
-standing G1. C. arbiter (navigate-then-manipulate). D. fine-tune on G1 data (GPU once, off-Mac).
+A. ✅ DONE — SmolVLA benchmarked on Mac + **language & voice → nav → walk** (Whisper STT, EN/JP).
+B. arm IK manipulation on a standing G1 (drive the arm from SmolVLA chunks). C. arbiter (navigate-then-manipulate). D. fine-tune on G1 data (GPU once, off-Mac).
 E. whole-body (cloud/Jetson brain, Mac client). The repo's decoupled architecture is already the
 correct shape for all five — including GR00T's own design.
