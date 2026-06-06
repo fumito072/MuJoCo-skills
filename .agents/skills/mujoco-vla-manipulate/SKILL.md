@@ -74,6 +74,25 @@ Verified on M5 Max: a Japanese voice clip ("前に進んで、左を向いて、
 upright — 100% local, no NVIDIA. STT is just a text-in front-end to `language_nav.parse`. A small
 local LLM (MLX) can later replace the keyword parser for free-form language.
 
+## Stage B (working): the full V+L+A loop — camera + language → SmolVLA → G1 arm
+The real Vision-Language-Action loop, 100% local on Apple Silicon: the standing G1's HEAD CAMERA
+(V, MuJoCo offscreen render) + a language instruction (L) go into SmolVLA, whose action chunk (A)
+drives the right arm; legs/torso held in the stand pose.
+```bash
+.venv-vla/bin/python scripts/vla_arm.py --probe                                  # save the camera + overview frames
+.venv-vla/bin/python scripts/vla_arm.py --instr "pick up the red block" --video assets/vla_arm.gif
+```
+Verified on M5 Max (MPS, NVIDIA-free): SmolVLA's action responds to BOTH the image and the words
+(different instruction or different view → different action), the arm moves under VLA control, the
+G1 stays upright. SmolVLA/SO-100 outputs **joint-space** actions (6-dim), so the chunk maps
+directly to 6 of the G1's 7 right-arm position actuators — no IK needed. The GIF is side-by-side:
+*left = what the robot sees (the V input), right = the arm moving*.
+
+**Honest scope:** SmolVLA is trained on a real SO-100 tabletop arm, not the MuJoCo G1, so this is
+a *plumbing* demo — it proves the whole V+L+A loop runs locally with no NVIDIA and the arm reacts
+to vision+language; it is NOT a reliable grasp. Making it grasp = fine-tune on G1 data (GPU once,
+off-Mac; inference stays local) — that is Stage D.
+
 ## Architecture — why our existing skills are already the right shape
 Every real G1 VLA stack (including NVIDIA's GR00T N1.7 + GEAR-SONIC) **decouples** the VLA
 (arm manipulation) from locomotion: the VLA emits ~6–14 DoF arm + gripper chunks at low Hz; a
@@ -104,6 +123,8 @@ separate controller handles the legs. That is exactly our split:
 
 ## Roadmap (A→E)
 A. ✅ DONE — SmolVLA benchmarked on Mac + **language & voice → nav → walk** (Whisper STT, EN/JP).
-B. arm IK manipulation on a standing G1 (drive the arm from SmolVLA chunks). C. arbiter (navigate-then-manipulate). D. fine-tune on G1 data (GPU once, off-Mac).
+B. ✅ DONE — **full V+L+A loop**: head camera + language → SmolVLA → G1 right arm (`vla_arm.py`),
+   plumbing-level (embodiment gap). C. arbiter (navigate-then-manipulate, sequence tasks).
+D. fine-tune SmolVLA on G1 data (GPU once, off-Mac) → reliable grasp; inference stays local.
 E. whole-body (cloud/Jetson brain, Mac client). The repo's decoupled architecture is already the
 correct shape for all five — including GR00T's own design.
