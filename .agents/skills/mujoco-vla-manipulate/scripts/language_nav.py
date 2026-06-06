@@ -27,16 +27,18 @@ FWD = ["forward", "go", "ahead", "straight", "前", "進", "まっすぐ", "歩"
 BACK = ["back", "backward", "後ろ", "下が", "戻"]
 LEFT = ["left", "左"]
 RIGHT = ["right", "右"]
-STOP = ["stop", "halt", "wait", "止ま", "停", "待"]
+STOP = ["stop", "halt", "wait", "止ま", "停", "待", "ストッ", "とまっ", "やめ"]
 FAST = ["fast", "quick", "速", "急"]
 SLOW = ["slow", "ゆっくり", "遅"]
 
 
 def parse(text):
-    """text -> intent dict {kind, ...}. kind in {forward, back, turn, stop}."""
+    """text -> intent dict {kind,...} in {forward, back, turn, stop}, or None if not a command.
+    Unrecognized speech returns None and is IGNORED (never defaults to forward) — so mic noise /
+    misheard words can't make the robot move or override a stop."""
     t = text.lower().strip()
     has = lambda kws: any(k in t for k in kws)
-    if has(STOP):
+    if has(STOP):                       # stop wins (safety first)
         return {"kind": "stop"}
     if has(LEFT):
         return {"kind": "turn", "deg": +90}
@@ -44,8 +46,10 @@ def parse(text):
         return {"kind": "turn", "deg": -90}
     if has(BACK):
         return {"kind": "back"}
-    speed = 0.55 if has(FAST) else (0.25 if has(SLOW) else 0.4)
-    return {"kind": "forward", "speed": speed}   # default / explicit forward
+    if has(FWD):
+        speed = 0.55 if has(FAST) else (0.25 if has(SLOW) else 0.4)
+        return {"kind": "forward", "speed": speed}
+    return None                         # not a recognized command -> ignore
 
 
 def build_segments(instructions, fwd_secs=4.0, turn_secs=3.5, stop_secs=2.0):
@@ -54,6 +58,8 @@ def build_segments(instructions, fwd_secs=4.0, turn_secs=3.5, stop_secs=2.0):
     speed, heading, t = 0.0, 0.0, 0.0
     for ins in instructions:
         it = parse(ins)
+        if it is None:
+            continue
         if it["kind"] == "stop":
             speed = 0.0; dur = stop_secs
         elif it["kind"] == "turn":

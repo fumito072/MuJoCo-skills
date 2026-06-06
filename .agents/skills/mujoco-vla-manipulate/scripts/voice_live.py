@@ -34,35 +34,45 @@ gw = ln.gw
 SR = 16000
 
 
+def _yaw_of(d):
+    w, x, y, z = d.qpos[3:7]
+    return float(np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)))
+
+
 class LiveCommand:
-    """Thread-safe target the voice thread writes and the control loop reads."""
+    """The CURRENT desired action, written by the voice thread and read by the control loop.
+    INTERRUPT semantics: each recognized command REPLACES the state (latest wins, no queue, no
+    accumulation). 'stop' fully halts — zero speed AND freezes the heading where it is, so the
+    robot stops translating *and* rotating. 'turn' is relative to the heading at the moment it is
+    spoken, so saying it again is a fresh 90deg, not a pile-up."""
     def __init__(self):
         self.speed = 0.0
-        self.turn_accum = 0.0      # cumulative heading change (rad) from 'turn' commands
-        self.yaw0 = None           # captured world yaw on first read -> absolute target = yaw0 + turn_accum
+        self.target_heading = None   # absolute world heading to hold; None until first read
+        self.d = None                # bound to MjData so apply() can read the current yaw
         self.lock = threading.Lock()
 
     def apply(self, intent):
+        if intent is None:
+            return
         with self.lock:
+            yaw = _yaw_of(self.d) if self.d is not None else 0.0
             k = intent["kind"]
             if k == "stop":
-                self.speed = 0.0
+                self.speed = 0.0; self.target_heading = yaw          # halt + hold here
             elif k == "forward":
-                self.speed = intent["speed"]
+                self.speed = intent["speed"]; self.target_heading = yaw  # go straight from now
             elif k == "back":
-                self.speed = -0.3
+                self.speed = -0.3; self.target_heading = yaw
             elif k == "turn":
-                self.turn_accum += np.deg2rad(intent["deg"])
+                self.speed = 0.0; self.target_heading = yaw + np.deg2rad(intent["deg"])  # 90deg from now
 
     def vxvywz(self, d):
-        w, x, y, z = d.qpos[3:7]
-        yaw = np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z))
+        yaw = _yaw_of(d)
         with self.lock:
-            if self.yaw0 is None:
-                self.yaw0 = yaw
-            target = self.yaw0 + self.turn_accum
+            if self.target_heading is None:
+                self.target_heading = yaw
+            err = (self.target_heading - yaw + np.pi) % (2*np.pi) - np.pi
             speed = self.speed
-        err = (target - yaw + np.pi) % (2*np.pi) - np.pi
         wz = float(np.clip(1.5 * err, -0.6, 0.6))
         return [speed, 0.0, wz]
 
@@ -106,11 +116,17 @@ def transcription_worker(seg_q, live, model, stop_event, verbose=True):
             continue
         if verbose:
             print(f'🎤 "{text}"', flush=True)
+        applied = False
         for ins in vn.split_instructions(text):
             intent = ln.parse(ins)
-            live.apply(intent)
+            if intent is None:
+                continue
+            live.apply(intent)          # latest recognized command interrupts/overrides
+            applied = True
             if verbose:
                 print(f'   → {ins!r} = {intent}', flush=True)
+        if not applied and verbose:
+            print('   (no command recognized — ignored)', flush=True)
 
 
 def start_listening(live, model, thresh, stop_event):
@@ -175,6 +191,7 @@ def main():
     live = LiveCommand()
     stop_event = threading.Event()
     m, d, policy = gw.make()
+    live.d = d                          # so the voice thread can read the current yaw on apply()
     stream = start_listening(live, args.model, args.thresh, stop_event)
     try:
         if args.no_viewer:
