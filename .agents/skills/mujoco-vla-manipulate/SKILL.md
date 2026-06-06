@@ -59,7 +59,16 @@ heading-hold execution on the existing `(vx,vy,wz)` walk hook.
 .venv-vla/bin/pip install mlx-whisper sounddevice soundfile
 .venv-vla/bin/python scripts/voice_nav.py --mic 6 --run --video assets/voice_nav.gif   # speak into the mic
 .venv-vla/bin/python scripts/voice_nav.py --audio clip.wav --run                        # or from a file
+
+# REAL-TIME voice: listen continuously, react the instant you speak (live 3D window)
+.venv-vla/bin/mjpython scripts/voice_live.py            # talk anytime: '前に進んで' / 'turn left' / '止まれ'
+.venv-vla/bin/python  scripts/voice_live.py --no-viewer # headless; --thresh tunes the mic VAD
 ```
+`voice_live.py` runs the mic capture + VAD + Whisper on background threads and the G1 walk +
+viewer on the main thread; speech updates a lock-guarded LiveCommand the control loop reads every
+policy step — say "turn left" and the walking G1 turns immediately. Verified headless: live
+commands (forward→turn→stop) are reflected in real time, Whisper transcribes a numpy mic segment,
+and the silence-based VAD splits an utterance correctly.
 Verified on M5 Max: a Japanese voice clip ("前に進んで、左を向いて、また進んで、止まれ") → Whisper
 (`mlx-community/whisper-large-v3-turbo`) transcribed it exactly → the G1 walked the path in sim,
 upright — 100% local, no NVIDIA. STT is just a text-in front-end to `language_nav.parse`. A small
