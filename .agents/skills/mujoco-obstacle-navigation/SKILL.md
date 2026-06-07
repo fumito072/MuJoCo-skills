@@ -50,7 +50,14 @@ python scripts/g1_nav_demo.py --video assets/g1_nav.gif --secs 13
 python scripts/go2_nav_demo.py --video assets/go2_nav.gif --secs 20
 # a MOVING (mocap) obstacle + a boxed-in turn-to-find-a-gap recovery:
 python scripts/go2_nav_dynamic.py --video assets/go2_nav_dynamic.gif --secs 26
+# CAMERA-DRIVEN avoidance: a forward DEPTH camera on the G1 (real perception, not abstract rays)
+#   -> per-bearing min depth -> VFH -> walk. Verified NO BUMP. (needs torch -> .venv-llm)
+.venv-llm/bin/python scripts/vision_nav.py --video assets/vision_nav.gif   # left=depth view, right=overview
 ```
+`vision_nav.py` is the "see with the camera, then decide" version: a body-mounted forward depth
+camera renders what the robot sees each tick; the nearest depth per bearing (with a generous safety
+bubble + speed-scaling) drives the gait — closer to how a real robot avoids, and it stops the
+bumping the ray version could show.
 The GO2 trot is made steerable by `mujoco-controller-baselines`' `go2_trot.trot(m, d, cmd, ...)`:
 `vx` scales stride, `wz` turns via a left/right stride differential (signed to match the G1 walk
 convention: `wz>0` = CCW), so one planner fits both robots.
