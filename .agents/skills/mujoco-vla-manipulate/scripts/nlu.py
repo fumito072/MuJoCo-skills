@@ -48,7 +48,13 @@ def understand(text, model=DEFAULT_LLM):
     prompt = tok.apply_chat_template(
         [{"role": "system", "content": SYS}, {"role": "user", "content": text}],
         add_generation_prompt=True)
-    out = generate(m, tok, prompt=prompt, max_tokens=128, verbose=False)
+    kw = {}
+    try:                                            # greedy (temp=0) -> deterministic, more reliable JSON
+        from mlx_lm.sample_utils import make_sampler
+        kw["sampler"] = make_sampler(temp=0.0)
+    except Exception:
+        pass
+    out = generate(m, tok, prompt=prompt, max_tokens=128, verbose=False, **kw)
     js = out[out.find("{"):out.rfind("}") + 1]
     try:
         return json.loads(js).get("plan", [])

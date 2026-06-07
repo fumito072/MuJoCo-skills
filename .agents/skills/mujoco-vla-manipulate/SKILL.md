@@ -115,7 +115,13 @@ The user's headline goal, executing the plan the NLU emits for "椅子まで行�
 chair (avoid obstacles), sit]`, as a two-phase executor:
 ```bash
 .venv-llm/bin/python scripts/chair_goto_sit.py --video assets/chair_goto_sit.gif
+# END-TO-END from ONE spoken command (voice -> Whisper -> LLM plan -> this executor):
+.venv-llm/bin/python scripts/voice_chair.py --say "あの障害物を避けて椅子に行って座って" --video assets/voice_chair.gif
+.venv-llm/bin/python scripts/voice_chair.py --mic 6 --video out.gif        # or speak it
 ```
+`voice_chair.py` chains the whole brain: speech → Whisper → NLU plan → dispatch. A keyword
+guardrail ("座"/sit, "椅子"/chair) backs up the LLM so a dropped step still triggers the right
+skill. Verified end-to-end on a spoken JP clip → G1 walked around obstacles to the chair and sat.
 - **Phase 1 (goto, avoid):** the 12-DOF pretrained walk + the VFH ray planner navigates around
   obstacles to a spot in front of the chair. Verified: arrives, upright.
 - **Phase 2 (sit):** the 29-DOF position model replays the CEM-optimized floor SIT-DOWN. Verified:
