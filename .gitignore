@@ -23,3 +23,6 @@ models/
 
 # LLM/voice/sim venv (mlx-lm + whisper + mujoco + torch; heavy, not committed)
 .venv-llm/
+
+# RL/Playground exploration venv (jax/brax; heavy)
+.venv-rl/
