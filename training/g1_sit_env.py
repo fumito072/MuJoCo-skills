@@ -44,7 +44,8 @@ class G1Sit(g1_joystick.Joystick):
     """G1 learns to sit down: lower to SIT_HEIGHT, upright, still, without toppling."""
 
     def sample_command(self, rng):
-        return jp.zeros(3)     # always "stay / sit", never a walk command
+        del rng                # no randomness: always "stay / sit", never a walk command
+        return jp.zeros(3)
 
 
 registry.locomotion.register_environment("G1Sit", G1Sit, sit_config)
