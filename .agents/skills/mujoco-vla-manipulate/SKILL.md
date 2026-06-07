@@ -110,6 +110,24 @@ a *plumbing* demo — it proves the whole V+L+A loop runs locally with no NVIDIA
 to vision+language; it is NOT a reliable grasp. Making it grasp = fine-tune on G1 data (GPU once,
 off-Mac; inference stays local) — that is Stage D.
 
+## Stage C (working): "go to the chair, avoiding obstacles, and sit down"
+The user's headline goal, executing the plan the NLU emits for "椅子まで行って座って" → `[goto
+chair (avoid obstacles), sit]`, as a two-phase executor:
+```bash
+.venv-llm/bin/python scripts/chair_goto_sit.py --video assets/chair_goto_sit.gif
+```
+- **Phase 1 (goto, avoid):** the 12-DOF pretrained walk + the VFH ray planner navigates around
+  obstacles to a spot in front of the chair. Verified: arrives, upright.
+- **Phase 2 (sit):** the 29-DOF position model replays the CEM-optimized floor SIT-DOWN. Verified:
+  pelvis z≈0.15, pitch −6° → stable seated.
+
+**Honest two-model split:** walking is the 12-DOF torque policy, sitting the 29-DOF position model
+— different MuJoCo models, so the phases are separate sims stitched into one video (base pose is
+the hand-off). And it is a *floor* sit-down (the solved, stable transition): lowering onto the
+ELEVATED seat is a balance-critical support transfer that open-loop control topples (re-verified —
+pitch >80°), so "sit" = sit down at the chair, not perch on the seat. Closing that = a learned /
+closed-loop sit policy (future). Everything here is NVIDIA-free, local.
+
 ## Architecture — why our existing skills are already the right shape
 Every real G1 VLA stack (including NVIDIA's GR00T N1.7 + GEAR-SONIC) **decouples** the VLA
 (arm manipulation) from locomotion: the VLA emits ~6–14 DoF arm + gripper chunks at low Hz; a
@@ -142,6 +160,9 @@ separate controller handles the legs. That is exactly our split:
 A. ✅ DONE — SmolVLA benchmarked on Mac + **language & voice → nav → walk** (Whisper STT, EN/JP).
 B. ✅ DONE — **full V+L+A loop**: head camera + language → SmolVLA → G1 right arm (`vla_arm.py`),
    plumbing-level (embodiment gap). C. arbiter (navigate-then-manipulate, sequence tasks).
-D. fine-tune SmolVLA on G1 data (GPU once, off-Mac) → reliable grasp; inference stays local.
+C. ✅ DONE — **"go to the chair avoiding obstacles & sit down"** two-phase executor
+   (`chair_goto_sit.py`): VFH walk → CEM floor sit-down, honest model hand-off.
+D. fine-tune SmolVLA on G1 data (GPU once, off-Mac) → reliable grasp; also a learned sit-on-seat
+   policy (the open balance problem). Inference stays local.
 E. whole-body (cloud/Jetson brain, Mac client). The repo's decoupled architecture is already the
-correct shape for all five — including GR00T's own design.
+correct shape for all of it — including GR00T's own design.
