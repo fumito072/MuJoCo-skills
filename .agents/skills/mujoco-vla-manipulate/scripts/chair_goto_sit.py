@@ -75,33 +75,41 @@ def phase1_walk(frames, fps):
         else:
             g.type = mujoco.mjtGeom.mjGEOM_BOX; g.size = [0.3, 0.3, 0.6]; g.pos = [ox, oy, 0.6]
     add_chair(sp, *CHAIR)
+    pelvis_b = [b for b in sp.bodies if b.name == "pelvis"][0]   # forward DEPTH camera = the robot's eyes
+    hc = pelvis_b.add_camera(); hc.name = "head"; hc.pos = [0.12, 0, 0.42]; hc.fovy = 100.0
+    _q = np.zeros(4); mujoco.mju_mat2Quat(_q, np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], float).flatten())
+    hc.quat = _q
     m = sp.compile(); m.opt.timestep = gw.SIM_DT
     d = mujoco.MjData(m)
     policy = torch.jit.load(os.path.join(gw.VENDOR, "motion.pt"))
-    gg = np.zeros(6, dtype=np.uint8); gg[OBST_GROUP] = 1; gid = np.zeros(1, dtype=np.int32)
+
+    # camera-depth obstacle avoidance (see vision_nav): the robot avoids using what its camera sees
+    cid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_CAMERA, "head")
+    dvopt = mujoco.MjvOption(); dvopt.geomgroup[OBST_GROUP] = 1
+    drend = mujoco.Renderer(m, 120, 160)
+    NB, FOVX = 16, np.degrees(2 * np.arctan(np.tan(np.radians(100.0)/2) * 160/120))
+    BBEAR = -np.radians(np.linspace(-FOVX/2, FOVX/2, NB))
+    SAFE2, SLOW2 = 0.95, 1.8
 
     def planner(_t=0.0):
-        origin = np.array([d.qpos[0], d.qpos[1], 0.5]); yaw = yaw_of(d)
-        rng = np.full(N, RMAX)
-        for i, a in enumerate(ANGLES):
-            dist = mujoco.mj_ray(m, d, origin, np.array([np.cos(yaw+a), np.sin(yaw+a), 0.0]), gg, 1, -1, gid)
-            if dist >= 0:
-                rng[i] = min(dist, RMAX)
-        dx, dy = WALK_GOAL - d.qpos[:2]
-        goal_dir = (np.arctan2(dy, dx) - yaw + np.pi) % (2*np.pi) - np.pi
-        blk = (rng < SAFE).copy()
-        for i in range(N):
-            if rng[i] < SAFE:
-                for j in (i-2, i-1, i+1, i+2):
-                    if 0 <= j < N:
+        drend.enable_depth_rendering(); drend.update_scene(d, camera=cid, scene_option=dvopt)
+        dep = drend.render(); drend.disable_depth_rendering()
+        per = np.clip(dep[50:74, :].min(axis=0).reshape(NB, 160 // NB).min(axis=1), 0.1, 6.0)
+        yaw = yaw_of(d); dx, dy = WALK_GOAL - d.qpos[:2]
+        gdir = (np.arctan2(dy, dx) - yaw + np.pi) % (2*np.pi) - np.pi
+        blk = (per < SAFE2).copy()
+        for i in range(NB):
+            if per[i] < SAFE2:
+                for j in (i-1, i+1):
+                    if 0 <= j < NB:
                         blk[j] = True
         free = np.where(~blk)[0]
         if len(free) == 0:
             return [0.0, 0.0, 0.6]
-        best = free[np.argmin(np.abs(ANGLES[free] - goal_dir))]
-        dist_goal = np.hypot(dx, dy)
-        vx = 0.5 * float(np.clip(min(rng[best] / RMAX, dist_goal / 1.0), 0.15, 1.0))
-        return [vx, 0.0, float(np.clip(1.5 * ANGLES[best], -0.6, 0.6))]
+        gd = np.clip(gdir, BBEAR.min(), BBEAR.max())
+        best = free[np.argmin(np.abs(BBEAR[free] - gd))]
+        vx = 0.5 * float(np.clip(min((per.min() - SAFE2) / (SLOW2 - SAFE2), np.hypot(dx, dy) / 1.0), 0.2, 1.0))
+        return [vx, 0.0, float(np.clip(1.4 * BBEAR[best], -0.6, 0.6))]
 
     cam = mujoco.MjvCamera(); cam.lookat = [1.5, 0.1, 0.3]; cam.distance, cam.azimuth, cam.elevation = 5.2, 90, -52
     vopt = mujoco.MjvOption(); vopt.geomgroup[OBST_GROUP] = 1; vopt.geomgroup[CHAIR_GROUP] = 1
@@ -118,7 +126,7 @@ def phase1_walk(frames, fps):
             frames.append(Image.fromarray(rend.render()).convert("P", palette=Image.ADAPTIVE, colors=64))
         st["k"] += 1
 
-    gw.walk(m, d, policy, planner, int(16.0 / gw.SIM_DT), log=log)
+    gw.walk(m, d, policy, planner, int(30.0 / gw.SIM_DT), log=log)
     print(f"  Phase 1: arrived ({d.qpos[0]:.2f},{d.qpos[1]:.2f}) reached_chair_front={reached[0]} upright={d.qpos[2]>0.5}")
     return reached[0]
 
