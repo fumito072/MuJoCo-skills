@@ -101,7 +101,7 @@ class MicVAD:
                     self.buf, self.speaking, self.silence = [], False, 0
 
 
-def transcription_worker(seg_q, live, model, stop_event, verbose=True):
+def transcription_worker(seg_q, live, model, stop_event, verbose=True, nlu_mod=None):
     import mlx_whisper
     while not stop_event.is_set():
         try:
@@ -116,24 +116,39 @@ def transcription_worker(seg_q, live, model, stop_event, verbose=True):
             continue
         if verbose:
             print(f'🎤 "{text}"', flush=True)
-        applied = False
-        for ins in vn.split_instructions(text):
-            intent = ln.parse(ins)
-            if intent is None:
-                continue
-            live.apply(intent)          # latest recognized command interrupts/overrides
-            applied = True
-            if verbose:
-                print(f'   → {ins!r} = {intent}', flush=True)
-        if not applied and verbose:
-            print('   (no command recognized — ignored)', flush=True)
+        if nlu_mod is not None:
+            # LLM understanding: free-form/vague text -> plan -> intents
+            intents = nlu_mod.to_live_intents(nlu_mod.understand(text))
+            applied = False
+            for it in intents:
+                if it["kind"] in ("forward", "back", "turn", "stop"):
+                    live.apply(it); applied = True
+                    if verbose:
+                        print(f'   → {it}', flush=True)
+                elif verbose:
+                    print(f'   ⚙ plan step (needs the navigate+sit executor, Stage C): {it}', flush=True)
+            if not applied and not intents and verbose:
+                print('   (no plan — ignored)', flush=True)
+        else:
+            applied = False
+            for ins in vn.split_instructions(text):
+                intent = ln.parse(ins)
+                if intent is None:
+                    continue
+                live.apply(intent)          # latest recognized command interrupts/overrides
+                applied = True
+                if verbose:
+                    print(f'   → {ins!r} = {intent}', flush=True)
+            if not applied and verbose:
+                print('   (no command recognized — ignored)', flush=True)
 
 
-def start_listening(live, model, thresh, stop_event):
+def start_listening(live, model, thresh, stop_event, nlu_mod=None):
     import sounddevice as sd
     seg_q = queue.Queue()
     vad = MicVAD(seg_q, thresh=thresh)
-    worker = threading.Thread(target=transcription_worker, args=(seg_q, live, model, stop_event), daemon=True)
+    worker = threading.Thread(target=transcription_worker,
+                              args=(seg_q, live, model, stop_event, True, nlu_mod), daemon=True)
     worker.start()
     stream = sd.InputStream(samplerate=SR, channels=1, dtype="float32", blocksize=1600, callback=vad)
     stream.start()
@@ -182,7 +197,17 @@ def main():
     ap.add_argument("--model", default="mlx-community/whisper-large-v3-turbo")
     ap.add_argument("--thresh", type=float, default=0.012, help="mic VAD energy threshold")
     ap.add_argument("--no-viewer", action="store_true", help="headless (no 3D window)")
+    ap.add_argument("--nlu", action="store_true",
+                    help="understand free-form/vague language with a local LLM (Qwen2.5-3B/MLX) "
+                         "instead of keyword matching")
     args = ap.parse_args()
+
+    nlu_mod = None
+    if args.nlu:
+        _nl = importlib.util.spec_from_file_location("nlu", os.path.join(HERE, "nlu.py"))
+        nlu_mod = importlib.util.module_from_spec(_nl); _nl.loader.exec_module(nlu_mod)
+        print("loading the language model (Qwen2.5-3B, MLX) for free-form understanding ...")
+        nlu_mod.understand("warm up")   # warm the model so the first real command is fast
 
     if not args.no_viewer and "mjpython" not in os.path.basename(sys.executable) and not os.environ.get("MJPYTHON"):
         print("NOTE: the live 3D window needs mjpython. Re-run as:")
@@ -192,7 +217,7 @@ def main():
     stop_event = threading.Event()
     m, d, policy = gw.make()
     live.d = d                          # so the voice thread can read the current yaw on apply()
-    stream = start_listening(live, args.model, args.thresh, stop_event)
+    stream = start_listening(live, args.model, args.thresh, stop_event, nlu_mod=nlu_mod)
     try:
         if args.no_viewer:
             run_control(m, d, policy, live)

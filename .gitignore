@@ -20,3 +20,6 @@ models/
 
 # VLA experiment venv (heavy, not committed)
 .venv-vla/
+
+# LLM/voice/sim venv (mlx-lm + whisper + mujoco + torch; heavy, not committed)
+.venv-llm/

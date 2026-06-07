@@ -38,37 +38,54 @@ locomotion policy to a VLA.
 at a few Hz, interpolate its 50-step action chunk under the fast physics loop (same 50 Hz / 500 Hz
 decimation discipline as the G1 walk). MPS is required; CPU is ~57x slower.
 
-## Setup (dedicated venv, kept out of git)
+## Setup — TWO venvs (kept out of git)
+SmolVLA's lerobot needs `transformers<5`; the NLU's mlx-lm needs `transformers>=5` — mutually
+exclusive, so the brain is split across two virtualenvs (both NVIDIA-free, Apple Silicon):
 ```bash
+# .venv-vla — the SmolVLA arm (Stage B): bench_smolvla.py, vla_arm.py
 python3 -m venv .venv-vla
-.venv-vla/bin/pip install "lerobot[smolvla]"
+.venv-vla/bin/pip install "lerobot[smolvla]" mujoco pillow
 .venv-vla/bin/python .agents/skills/mujoco-vla-manipulate/scripts/bench_smolvla.py   # the gate
+
+# .venv-llm — language + voice + nav + walk (Stage A/C): nlu.py, voice_live.py, run_sim.py, ...
+python3 -m venv .venv-llm
+.venv-llm/bin/pip install mlx-lm mlx-whisper mujoco torch numpy pillow sounddevice soundfile
 ```
-(Separate venv because lerobot pins a newer torch; it must not disturb the mujoco-skills env.)
+Rule of thumb: **SmolVLA scripts → `.venv-vla`; everything language/voice/locomotion → `.venv-llm`.**
 
 ## Stage A (working): language & VOICE → navigation, in sim, NVIDIA-free
 A typed or **spoken** instruction drives the pretrained G1 walk in MuJoCo — no VLA action
 transfer, no IK, no fine-tuning (safest first loop). Bilingual EN/JP keyword parser →
 heading-hold execution on the existing `(vx,vy,wz)` walk hook.
 ```bash
-# text -> G1 navigates (EN or JP), render a GIF
-.venv-vla/bin/python scripts/language_nav.py --say "forward; turn left; forward; stop" --video assets/language_nav.gif
-.venv-vla/bin/python scripts/language_nav.py --say "前に進んで; 右を向いて; 進んで; 止まれ"
+# text -> G1 navigates (EN or JP), render a GIF        (all in .venv-llm)
+.venv-llm/bin/python scripts/language_nav.py --say "forward; turn left; forward; stop" --video assets/language_nav.gif
+.venv-llm/bin/python scripts/language_nav.py --say "前に進んで; 右を向いて; 進んで; 止まれ"
 
 # VOICE -> G1: Whisper (MLX, Apple-Silicon, NVIDIA-free) transcribes, then drives the G1
-.venv-vla/bin/pip install mlx-whisper sounddevice soundfile
-.venv-vla/bin/python scripts/voice_nav.py --mic 6 --run --video assets/voice_nav.gif   # speak into the mic
-.venv-vla/bin/python scripts/voice_nav.py --audio clip.wav --run                        # or from a file
+.venv-llm/bin/python scripts/voice_nav.py --mic 6 --run --video assets/voice_nav.gif   # speak into the mic
+.venv-llm/bin/python scripts/voice_nav.py --audio clip.wav --run                        # or from a file
 
 # REAL-TIME voice: listen continuously, react the instant you speak (live 3D window)
-.venv-vla/bin/mjpython scripts/voice_live.py            # talk anytime: '前に進んで' / 'turn left' / '止まれ'
-.venv-vla/bin/python  scripts/voice_live.py --no-viewer # headless; --thresh tunes the mic VAD
+.venv-llm/bin/mjpython scripts/voice_live.py            # keyword parser: '前に進んで' / 'turn left' / '止まれ'
+.venv-llm/bin/mjpython scripts/voice_live.py --nlu      # LLM understanding: 'もっと進めー', 'もうええ止まって'
+.venv-llm/bin/python  scripts/voice_live.py --no-viewer # headless; --thresh tunes the mic VAD
 ```
-`voice_live.py` runs the mic capture + VAD + Whisper on background threads and the G1 walk +
-viewer on the main thread; speech updates a lock-guarded LiveCommand the control loop reads every
-policy step — say "turn left" and the walking G1 turns immediately. Verified headless: live
-commands (forward→turn→stop) are reflected in real time, Whisper transcribes a numpy mic segment,
-and the silence-based VAD splits an utterance correctly.
+`voice_live.py` runs the mic + VAD + Whisper (+ optional LLM) on background threads and the G1 walk
++ viewer on the main thread; speech updates a lock-guarded LiveCommand the control loop reads every
+policy step — say "turn left" and the walking G1 turns immediately.
+
+### Natural-language understanding (`--nlu`): AI instead of keyword rules
+With `--nlu`, a local LLM (Qwen2.5-3B-4bit via Apple MLX, ~180 ms, NVIDIA-free) replaces the
+keyword parser: it reads free-form / vague / casual speech and emits a JSON **plan**. So it
+understands paraphrases the keyword matcher can't — "もっと進めー", "そのまま行って", "もうええ
+止まって" — and compound goals: `nlu.py "椅子まで行って座って"` → `[goto chair, sit]`. Standalone:
+```bash
+.venv-llm/bin/python scripts/nlu.py "あの障害物を避けて椅子に行って座れ"
+# -> plan: [{goto, target:chair, avoid:obstacle}, {sit}]
+```
+Directional steps (forward/back/turn/stop) execute live now; `goto`/`sit` steps are produced
+correctly but need the navigate+sit executor (Stage C).
 Verified on M5 Max: a Japanese voice clip ("前に進んで、左を向いて、また進んで、止まれ") → Whisper
 (`mlx-community/whisper-large-v3-turbo`) transcribed it exactly → the G1 walked the path in sim,
 upright — 100% local, no NVIDIA. STT is just a text-in front-end to `language_nav.parse`. A small
