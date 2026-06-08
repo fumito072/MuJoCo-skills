@@ -60,13 +60,19 @@ Upload `g1_sit_env.py` too, then:
 ```python
 !python g1_train_colab.py --task sit --steps 40_000_000 --out /content/drive/MyDrive/g1_sit
 ```
-This uses the custom sit reward (low pelvis + upright + planted feet + don't topple). **Expect to
-iterate**: RL reward design is the real work — if it doesn't sit, we adjust the reward weights in
-`g1_sit_env.py` and re-run. Save every run to Drive.
+`g1_sit_env.py` adds a **chair** (a static seat + a pelvis collision geom) so the robot lowers onto
+*support* — a stable upright sit is reachable, unlike a balance-critical unsupported squat. The reward
+pulls the pelvis down onto the seat, keeps it upright and over the seat, and (unlike the first version)
+drops the standing-pose terms that fought sitting. **Expect to iterate**: if it doesn't sit, we adjust
+the weights / seat height in `g1_sit_env.py` and re-run. Save every run to Drive.
+
+Checkpoints are written every eval: `g1_sit_best_params.pkl` (highest eval reward) and
+`g1_sit_latest_params.pkl` (most recent) — so a disconnect/early-stop is safe and you can replay the
+**best** policy, since the final eval isn't always the best.
 
 ### 6. Download the trained policy to your Mac
-- Grab the `g1_sit_params.pkl` the script saved (use the notebook's `files.download(...)` cell, or
-  the left 📁 sidebar → right-click → Download). `g1_sit_config.json` is optional metadata.
+- Grab `g1_sit_best_params.pkl` (and/or `g1_sit_params.pkl`) — notebook `files.download(...)` cell or
+  the left 📁 sidebar → right-click → Download. `g1_sit_config.json` is optional metadata.
 - Put it in this repo at `models/policies/g1_sit_params.pkl`.
 
 ### 7. Run it on your Mac (inference, NVIDIA-free)

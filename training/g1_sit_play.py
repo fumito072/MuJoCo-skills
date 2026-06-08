@@ -20,17 +20,20 @@ Run with the RL venv (it has playground + brax + jax + mujoco):
 import argparse
 import os
 import pickle
+import sys
 
 import numpy as np
 import mujoco
 import jax
 import jax.numpy as jp
 
-from mujoco_playground._src.locomotion.g1 import g1_constants as consts
-from mujoco_playground._src.locomotion.g1 import base as g1_base
+from mujoco_playground._src.locomotion.g1 import g1_constants as consts  # noqa: F401
 from mujoco_playground.config import locomotion_params
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.acme import running_statistics
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import g1_sit_env  # chaired model builder + sit constants, shared with training  # noqa: E402
 
 # Must match the G1 Joystick env (mujoco_playground .../g1/joystick.py default_config).
 CTRL_DT, SIM_DT, ACTION_SCALE = 0.02, 0.002, 0.5
@@ -40,12 +43,8 @@ STATE_SIZE, PRIV_SIZE = 103, 216               # policy obs ("state") / value ob
 
 
 def build_model():
-    """Playground G1 feetonly flat-terrain model, loaded into the plain MuJoCo C engine."""
-    m = mujoco.MjModel.from_xml_string(
-        consts.FEET_ONLY_FLAT_TERRAIN_XML.read_text(), assets=g1_base.get_assets()
-    )
-    m.opt.timestep = SIM_DT
-    return m
+    """G1 feetonly flat-terrain model WITH the chair (same surgery as training) — plain C engine."""
+    return g1_sit_env.build_plain_chair_model(SIM_DT)
 
 
 def load_policy(params_path, act_size):
@@ -75,6 +74,7 @@ def main():
     d = mujoco.MjData(m)
     kid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, "knees_bent")
     mujoco.mj_resetDataKeyframe(m, d, kid)
+    d.qpos[0:2] = g1_sit_env.SEAT_XY          # start standing over the seat, like the training reset
     mujoco.mj_forward(m, d)
     default_pose = d.qpos[7:].copy()
 
@@ -133,10 +133,13 @@ def main():
     w, x, y, zq = d.qpos[3:7]
     pitch = np.degrees(np.arcsin(np.clip(2 * (w * y - zq * x), -1, 1)))
     pz = float(d.qpos[2])
-    print(f"pelvis_z: start={zs[0]:.3f}  min={min(zs):.3f}  final={pz:.3f}  (sit target≈0.42)")
-    print(f"final pitch={pitch:+.0f}deg  upright={abs(pitch) < 35}")
-    seated = pz < 0.55 and abs(pitch) < 35
-    print(f"RESULT: {'LOWERED & UPRIGHT (sit-like) ✓' if seated else 'did NOT settle low+upright (topple/stand?)'}")
+    target = g1_sit_env.SIT_TARGET_Z
+    seat_id, pcol_id = m.geom("seat").id, m.geom("pelvis_collision").id
+    on_seat = any({d.contact[i].geom1, d.contact[i].geom2} == {seat_id, pcol_id} for i in range(d.ncon))
+    print(f"pelvis_z: start={zs[0]:.3f}  min={min(zs):.3f}  final={pz:.3f}  (seat-rest target≈{target:.3f})")
+    print(f"final pitch={pitch:+.0f}deg  upright={abs(pitch) < 30}  resting_on_seat={on_seat}")
+    seated = abs(pz - target) < 0.08 and abs(pitch) < 30 and on_seat
+    print(f"RESULT: {'SEATED ON CHAIR ✓' if seated else 'did NOT sit (hover / topple / missed seat)'}")
 
     if args.video and frames:
         out = os.path.abspath(args.video)
