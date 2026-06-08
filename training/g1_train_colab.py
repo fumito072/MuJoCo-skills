@@ -15,6 +15,7 @@ import functools
 import json
 import os
 import pickle
+import shutil
 
 import jax
 
@@ -56,27 +57,44 @@ def main():
     network_factory = functools.partial(ppo_networks.make_ppo_networks, **net_kwargs)
     train_kwargs = {k: v for k, v in ppo_params.items() if k != "network_factory"}
 
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    latest_path, best_path = out + "_latest_params.pkl", out + "_best_params.pkl"
+    best = {"r": float("-inf")}
+
+    # brax calls these per eval in this order: policy_params_fn -> run_evaluation -> progress_fn.
+    # So at progress() time, latest_params.pkl already holds THIS eval's params -> promote if best.
+    def save_ckpt(step, make_policy, params):     # brax passes (current_step, make_policy, params)
+        del step, make_policy
+        with open(latest_path, "wb") as f:
+            pickle.dump(params, f)
+
     def progress(step, metrics):
         r = metrics.get("eval/episode_reward", float("nan"))
-        print(f"  step {step:>12,}  eval_reward={r:8.2f}", flush=True)
+        tag = ""
+        if r == r and r > best["r"]:               # r == r skips NaN
+            best["r"] = r
+            if os.path.exists(latest_path):
+                shutil.copyfile(latest_path, best_path)
+                tag = "  <- new best (saved)"
+        print(f"  step {step:>12,}  eval_reward={r:8.2f}{tag}", flush=True)
 
-    print("training...")
+    print("training... (checkpoints: *_latest / *_best every eval; survives early stop & disconnect)")
     _, params, _ = ppo.train(
         environment=env,
         eval_env=eval_env,
         network_factory=network_factory,
         wrap_env_fn=wrapper.wrap_for_brax_training,
         progress_fn=progress,
+        policy_params_fn=save_ckpt,
         seed=args.seed,
         **train_kwargs,
     )
 
-    out = os.path.abspath(args.out)
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     # Save params FIRST (the thing we can't regenerate) so a later hiccup can't lose the policy.
     with open(out + "_params.pkl", "wb") as f:
         pickle.dump(params, f)
-    print(f"\nSAVED policy -> {out}_params.pkl")
+    print(f"\nSAVED final policy -> {out}_params.pkl  (best eval={best['r']:.2f} -> {best_path})")
 
     # config.json is best-effort metadata; observation_size is a dict for asymmetric obs, so don't int() it.
     try:
