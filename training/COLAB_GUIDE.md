@@ -65,13 +65,20 @@ iterate**: RL reward design is the real work — if it doesn't sit, we adjust th
 `g1_sit_env.py` and re-run. Save every run to Drive.
 
 ### 6. Download the trained policy to your Mac
-- In Drive, grab the `*_params.pkl` (and `*_config.json`) the script saved.
-- Put them in this repo, e.g. `models/policies/g1_sit_params.pkl`.
+- Grab the `g1_sit_params.pkl` the script saved (use the notebook's `files.download(...)` cell, or
+  the left 📁 sidebar → right-click → Download). `g1_sit_config.json` is optional metadata.
+- Put it in this repo at `models/policies/g1_sit_params.pkl`.
 
 ### 7. Run it on your Mac (inference, NVIDIA-free)
-The policy is a small network; the script `g1_train_colab.py --export` writes the obs spec + params
-so a Mac-side runner can step it in MuJoCo (CPU/MPS) — same pattern as `mujoco-pretrained-deploy`.
-We'll wire the Mac runner once you have a trained checkpoint.
+Replay the trained policy in plain MuJoCo (C engine, CPU — no MJX, no NVIDIA) with the runner. It
+rebuilds the policy with the exact training network config and reproduces the G1 Joystick obs/action,
+holding the command at zero (sit), then writes a GIF + sit metrics (pelvis height, uprightness):
+```bash
+.venv-rl/bin/python training/g1_sit_play.py \
+    --params models/policies/g1_sit_params.pkl --video assets/g1_sit.gif --seconds 6
+```
+Look for `RESULT: LOWERED & UPRIGHT (sit-like)` and a final `pelvis_z` near the 0.42 target. If it
+topples or just stands, that's reward-tuning feedback → adjust weights in `g1_sit_env.py` and re-train.
 
 ---
 

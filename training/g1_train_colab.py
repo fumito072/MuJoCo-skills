@@ -73,15 +73,26 @@ def main():
 
     out = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    # Save params FIRST (the thing we can't regenerate) so a later hiccup can't lose the policy.
     with open(out + "_params.pkl", "wb") as f:
         pickle.dump(params, f)
-    json.dump(
-        {"env": env_name, "task": args.task,
-         "obs_size": int(env.observation_size), "act_size": int(env.action_size),
-         "network": net_kwargs},
-        open(out + "_config.json", "w"), default=str, indent=2)
-    print(f"\nSAVED policy -> {out}_params.pkl  (+ _config.json)")
-    print("Download both to your Mac (e.g. models/policies/) — we'll wire the Mac-side runner next.")
+    print(f"\nSAVED policy -> {out}_params.pkl")
+
+    # config.json is best-effort metadata; observation_size is a dict for asymmetric obs, so don't int() it.
+    try:
+        obs_size = env.observation_size
+        obs_size = ({k: list(v) for k, v in obs_size.items()}
+                    if hasattr(obs_size, "items") else int(obs_size))
+        json.dump(
+            {"env": env_name, "task": args.task,
+             "obs_size": obs_size, "act_size": int(env.action_size),
+             "ctrl_dt": 0.02, "sim_dt": 0.002, "action_scale": 0.5,
+             "network": net_kwargs},
+            open(out + "_config.json", "w"), default=str, indent=2)
+        print(f"SAVED config -> {out}_config.json")
+    except Exception as e:  # never let metadata sink the run
+        print(f"(config.json skipped: {e})")
+    print("Download g1_sit_params.pkl to your Mac (models/policies/) and replay with training/g1_sit_play.py.")
 
 
 if __name__ == "__main__":
