@@ -40,8 +40,13 @@ def main():
 
     print(f"jax devices: {jax.devices()}")
     print(f"task={args.task} env={env_name} steps={args.steps:,}")
-    env = registry.load(env_name)
-    eval_env = registry.load(env_name)
+    # Force the pure-JAX MJX backend. Newer Playground defaults config.impl to "warp",
+    # which needs mujoco-warp (absent on stock Colab) -> AttributeError GraphMode.WARP.
+    cfg = registry.get_default_config(env_name)
+    cfg.impl = "jax"
+    print(f"mjx impl = {cfg.impl}")
+    env = registry.load(env_name, config=cfg)
+    eval_env = registry.load(env_name, config=cfg)
 
     # reuse the tuned G1 PPO config (network + hyperparams) for both tasks
     ppo_params = locomotion_params.brax_ppo_config("G1JoystickFlatTerrain")
@@ -56,7 +61,7 @@ def main():
         print(f"  step {step:>12,}  eval_reward={r:8.2f}", flush=True)
 
     print("training...")
-    make_inference_fn, params, _ = ppo.train(
+    _, params, _ = ppo.train(
         environment=env,
         eval_env=eval_env,
         network_factory=network_factory,

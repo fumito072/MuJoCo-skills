@@ -21,6 +21,9 @@ SIT_HEIGHT = 0.42          # target base height (m): chair-ish, well below the ~
 
 def sit_config():
     cfg = g1_joystick.default_config()
+    # Force the pure-JAX MJX backend: newer Playground defaults cfg.impl to "warp",
+    # which needs mujoco-warp (absent on stock Colab) -> AttributeError GraphMode.WARP.
+    cfg.impl = "jax"
     rc = cfg.reward_config
     rc.base_height_target = SIT_HEIGHT
     s = rc.scales
