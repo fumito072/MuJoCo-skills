@@ -1,43 +1,54 @@
-"""END-TO-END autonomous G1 demo: WALK -> AVOID (raycast VFH) -> ALIGN -> SIT on a seat.
+"""END-TO-END autonomous G1 demo: WALK -> AVOID -> TURN -> BACK UP -> SIT on a REAL chair.
 One model, one continuous rollout, one video. CPU-only on macOS (plain python, offscreen CGL
 rendering; NEVER mujoco.viewer / mjpython).
 
+The chair is REALISTIC and COLLIDABLE: seat board + backrest + 4 legs (g1_sit_env
+.add_real_chair_geoms), with explicit contact pairs to the robot's OWN thigh/shin/foot
+collision geoms (contype=0 capsules/boxes that ship with the playground model) plus a
+torso proxy box — so legs can NOT pass through the chair, and the approach must be
+human-like: walk to the chair FRONT, turn 180 deg, back up until the calves are at the
+front edge, then sit. Seat height 0.39 m = sized to the 1.32 m robot (a 0.45 m human
+chair is a tall stool for the G1: the mesh-calibrated pelvis bottom cannot reach it and
+the robot perches leaning ~34 deg forward — measured; human-chair sitting = RL track).
+
 Pipeline (FSM at 50 Hz):
-  NAVIGATE  official pretrained 29-DOF joystick ONNX walk (models/policies/g1_joystick_29dof.onnx,
-            obs recipe + calibrated creep trim verified in training/g1_walk_onnx.py), steered by
-            the stateless raycast-VFH planner from the mujoco-obstacle-navigation skill
-            (21 mj_ray casts, 200 deg FOV, rays masked to obstacle geom group 4 only),
-            goal = seat center. Exits when dist(base, seat) < 0.6 m.
-  ALIGN     same ONNX walk; command = body-frame P-servo on (seat_xy - base_xy) PLUS a yaw
-            servo wz = clip(-1.2*yaw, +-0.5) toward the seat-facing heading (the sit basin
-            is +-45 deg about yaw=0 — attempt #1 docked at 2.5 cm but yaw +64 deg and
-            toppled), on top of the calibrated stationary trim (vx -0.20, vy +0.07).
-            Docking tolerance 0.055 m / 25 deg =~ 70%/55% of the measured basin.
-  SETTLE    trimmed zero command for 1.0 s; verify drift < 0.15 m/s and error still in tolerance
-            (else back to ALIGN, up to 3 retries), then wait (<= 2 s) for a BOTH-FEET-DOWN
-            sway-calm instant of the march (low lateral velocity alone is NOT enough —
-            attempt #2 cut mid-march and rolled over sideways within 0.4 s of the descent).
-  FREEZE    STOP querying the ONNX; ramp d.ctrl to the keyframe stand (0.4 s), settle (0.6 s),
-            then verify a statically stable stand (both feet down, |v|<0.10 m/s, |roll|<3 deg,
-            |pitch|<10 deg, still inside the basin). This reproduces EXACTLY the verified
-            initial condition of the scripted sit. On failure: re-engage the ONNX from its
-            verified cold-start state (phase=[0,pi], last_action=0) and retry ALIGN.
-  SIT       linear d.ctrl ramp (1.0 s) from the keyframe stand to the verified scripted seated
-            pose (hip_pitch=-1.254, knee=+1.611, ankle_pitch=+0.137 — the deliberate
-            plantarflex bias; see training/g1_sit_scripted.py), then hold.
-  HOLD      3 s; final seated metrics (pelvis z vs SIT_TARGET_Z, pitch, seat contact + normal
-            force via mj_contactForce).
+  NAVIGATE  official pretrained 29-DOF joystick ONNX walk (models/policies/g1_joystick_29dof
+            .onnx, obs recipe + calibrated creep trim verified in training/g1_walk_onnx.py),
+            steered by the raycast-VFH planner (21 mj_ray casts, 200 deg FOV, rays masked to
+            obstacle geom group 4), goal = dock point. Exits at dist < 0.7 m (before the
+            physical chair).
+  TURN      turn in place (trim + wz servo) until the heading is within 20 deg of the
+            seat-facing yaw (= pi: back to the chair).
+  ALIGN     body-frame P-servo on (dock - base) — mostly WALKING BACKWARD — plus the yaw
+            servo, on top of the calibrated stationary trim (vx -0.20, vy +0.07). The
+            dock point = chair front edge + 1.5 cm, the center of the measured REAL-chair
+            basin (fwd +8 / back -5 / lateral +-8 cm, yaw +-20 deg verified; yaw 35 deg
+            has a topple hole, so the yaw budget is tight).
+  SETTLE    station-keeping march (trim + small closed-loop position servo — the open-loop
+            trim is heading/history dependent and drifted 3 cm/s into the chair), then wait
+            (<= 2 s) for the cut gate: both feet down + feet abreast + ASYMMETRIC velocity
+            bounds (away-from-chair vx is the killer; toward-chair drift gets caught by the
+            seat) + low gyro/roll. Out-of-budget or never-calm -> retry via ALIGN (5x).
+  SIT       at the gate instant, STOP the ONNX and ramp d.ctrl (0.7 s) STRAIGHT to the
+            verified seated pose (hip_pitch=-1.254, knee=+1.611, ankle_pitch=+0.137
+            plantarflex bias; training/g1_sit_scripted.py). There is deliberately NO
+            stand phase in between: the open-loop keyframe stand is an unsteerable
+            ~1 s glide window (measured: it topples forward in ~2 s under its weak
+            ankles, never kills the cut momentum, and 0.1 m/s of residual glide = a
+            10 cm miss — 'sitting into empty air'). The direct cut shrinks the
+            uncontrolled exposure to ~0.55 s and the SEAT itself kills the residual
+            motion. On the real chair the weight lands on BOTH the pelvis box and the
+            thighs (measured ~212 N total) — human-like load sharing.
+  HOLD      3 s; final seated metrics (pelvis z vs SIT_TARGET_Z=0.545, pitch, chair contact
+            + normal force via mj_contactForce).
 
-Scene: playground G1 feetonly flat terrain + the g1_sit_env chair geoms (seat moved to world
-(3.5, 0), pelvis_collision box identical) + 3 obstacles (group 4, contype/conaffinity 1) that
-block the straight start->seat line so VFH must steer.
+Scene: playground G1 feetonly flat terrain + REAL chair at world (3.5, 0) facing -x (the
+robot approaches from the front) + 3 obstacles (group 4) blocking the straight line.
 
-HONEST collision caveats (verified model facts): the G1 feet have contype=0 and collide ONLY via
-explicit floor<->feet <pair> elements, and shins/thighs have no collision geoms — so the FEET
-pass through the seat and the obstacles; only the pelvis box is physical to them. Obstacle
-avoidance is therefore enforced by the raycast VFH (and checked with a min-clearance metric),
-not by full-body contact. The seat catches the pelvis box during the SIT descent exactly as in
-the verified scripted sit.
+HONEST caveats: obstacle avoidance is still enforced by the raycast VFH + pelvis-box
+contact only (leg<->obstacle pairs are not yet wired); the pelvis box and torso box are
+calibrated proxies (pelvis bottom = mesh bbox bottom, base-0.155). The chair itself is
+fully physical to pelvis, torso, thighs, shins and feet via explicit pairs.
 
 Hard rules respected: no qpos teleports after t=0, no welds/mocap/xfrc/gravity edits.
 
@@ -67,15 +78,16 @@ GIF_PATH = os.path.join(REPO, "assets", "g1_walk_to_sit.gif")
 # --- timing ---
 CTRL_DT, SUBSTEPS = 0.02, 10          # 50 Hz policy, 10 x 0.002 s physics substeps
 ACTION_SCALE, GAIT_FREQ = 0.5, 1.5
-MAX_T = 45.0                          # hard rollout cap (timeout -> honest failure)
+MAX_T = 60.0                          # hard rollout cap (timeout -> honest failure)
 NAV_TIMEOUT = 30.0
-WALK_GUARD_T = 40.0                   # must have started SIT by here
+WALK_GUARD_T = 55.0                   # must have started SIT by here
 
 # --- calibrated command trim (measured; see training/g1_walk_onnx.py docstring) ---
 TRIM_VX, TRIM_VY = -0.20, +0.07
 
 # --- scene ---
-SEAT_WORLD = np.array([3.5, 0.0])
+SEAT_WORLD = np.array([3.5, 0.0])     # seat center
+CHAIR_YAW = np.pi                     # sitter faces -x: the robot approaches the chair FRONT
 OBST_GROUP = 4
 # (name, x, y, kind, sx, sy, half_h, rgba). Heights >= 1.2 m so the z=0.5 rays see them.
 OBSTACLES = [
@@ -90,52 +102,57 @@ ANGLES = np.array([-FOV / 2 + FOV * i / (N_RAYS - 1) for i in range(N_RAYS)])
 WIDEN = 3   # blocked-sector widening (+-WIDEN); was +-2 — the pelvis box (circumradius
             # ~0.14 m) scraped an obstacle at 0.07 m base clearance with +-2
 
-# Docking NOMINAL: the 0.08 m basin was measured around base = seat_center - SEAT_XY
-# (g1_sit_env puts the seat at (-0.08, 0) with the robot at the origin). Attempt #2 docked
-# at the seat CENTER = -8 cm in x from nominal — exactly the one fragile basin direction.
-DOCK_WORLD = SEAT_WORLD - np.array(g1_sit_env.SEAT_XY)   # = SEAT_WORLD + (0.08, 0)
+# Docking NOMINAL: the REAL-chair basin was measured around base = front edge + 1.5 cm,
+# robot facing away from the backrest (probe sweep 2026-06-10: fwd +8 / back -5 /
+# lateral +-8 cm OK, yaw +-20 deg OK with a topple hole at 35 deg).
+DOCK_AHEAD = 0.04   # was 0.015: a -5 cm dock error left only ~6 mm between
+                    # the standing shin tops (z 0.405) and the board (top 0.39)
+_dock_local = g1_sit_env.REAL_DOCK_OFFSET[0] + DOCK_AHEAD
+DOCK_WORLD = SEAT_WORLD + _dock_local * np.array([np.cos(CHAIR_YAW), np.sin(CHAIR_YAW)])
+YAW_TARGET = CHAIR_YAW           # seated heading = the chair's facing direction
 
 # --- FSM tuning ---
-NAV_EXIT_DIST = 0.6
-ALIGN_TOL = 0.055        # ~70% of the measured 0.08 m all-direction docking basin
+NAV_EXIT_DIST = 0.7      # stop short of the (now physical) chair, then turn around
+TURN_EXIT = np.deg2rad(20)
+ALIGN_TOL = 0.045        # inside the verified -5 cm back / +-8 cm basin with margin
 ALIGN_DEADBAND = 0.030   # inside this, stop chasing the march-in-place wobble
 ALIGN_HOLD_S = 0.5
-# Yaw servo: the 0.08 m / +-45 deg basin was measured with the robot facing the seat's +x.
-# First E2E attempt docked at 2.5 cm but yaw +64 deg (VFH detour heading, never corrected,
-# and it kept drifting during ALIGN/SETTLE) -> toppled. ALIGN must servo yaw -> 0 too.
-YAW_TOL = np.deg2rad(25)        # ALIGN/SETTLE exit gate (~55% of the +-45 deg basin)
+DIST_HARD = 0.065        # never descend further out than this (basin back edge -5 cm)
+# Yaw budget is TIGHT on the real chair: 20 deg verified OK, 35 deg topples (rotated
+# legs/board-edge interaction), so gate at 15 deg and hard-cap at 25 deg.
+YAW_TOL = np.deg2rad(15)        # ALIGN/SETTLE exit gate
 YAW_DEADBAND = np.deg2rad(8)    # inside this, stop chasing the march wobble
-YAW_HARD = np.deg2rad(45)       # never start the descent outside the measured basin
+YAW_HARD = np.deg2rad(25)       # never start the descent outside the verified basin
 SETTLE_S = 1.0
 SETTLE_SPEED_MAX = 0.15
-MAX_SETTLE_RETRIES = 3
+MAX_SETTLE_RETRIES = 5
 # Sit-entry gate: cut to the scripted descent only at a SWAY-CALM instant of the march.
 # (Measured: double-stance instants are the weight-transfer instants — body-lateral velocity
 # peaks there at ~0.15-0.2 m/s, and entering the descent with that sway rolled the robot off
 # the seat sideways. Calm instants recur every ~0.66 s gait cycle.)
-CALM_WAIT_MAX = 2.0      # max wait for a calm instant; on timeout cut anyway (noted)
-CALM_VX, CALM_VY = 0.12, 0.06   # m/s body-frame pelvis velocity bounds
-CALM_GYRO = 0.5          # rad/s |gyro x|, |gyro y| bound
-CALM_ROLL = 2.0          # deg |roll| bound
+CALM_WAIT_MAX = 2.0      # max wait for a calm instant (backward-entry march sways more)
+# Body +x faces AWAY from the chair when docked. Away-drift at the cut GLIDES the whole
+# freeze+descent (0.12 m/s cut velocity x ~1 s = the 13 cm miss measured in attempt #10 —
+# the robot sat into empty air in front of the seat). Toward-chair drift is the SAFE
+# direction (the seat catches it), so the bounds are asymmetric.
+CALM_VX_AWAY, CALM_VX_TOWARD = 0.03, 0.08   # m/s body vx in (-TOWARD, +AWAY)
+CALM_VY = 0.08                  # m/s body-frame lateral bound
+CALM_GYRO = 0.9          # rad/s |gyro x|, |gyro y| bound
+CALM_ROLL = 4.0          # deg |roll| bound (the backward-entry march sways ~+-6 deg)
+FEET_ABREAST = 0.10      # feet side-by-side (|x_L - x_R| body frame): no mid-stride cuts
+# MEASURED: double stance in this march lasts only 1-3 ticks (0.02-0.06 s) at footfalls —
+# there IS no quiet double-support window to wait for. So: cut at the FIRST decent
+# footfall instant (gate above) and descend immediately; a rejected instant just
+# waits for the next footfall (or retries via ALIGN on timeout).
 
-# FREEZE: the verified scripted descent starts from the STATIC symmetric keyframe stand.
-# Attempt #2 cut from the march straight into the descent and rolled over sideways within
-# 0.4 s (mid-march legs = asymmetric support; roll -1 -> +24 -> +86 deg, 0.8 m sideways
-# slide past the seat). So: at a calm BOTH-FEET-DOWN instant, ramp d.ctrl to the keyframe
-# stand (FREEZE_RAMP_S), let it settle (rest of FREEZE_S), verify static stability, and
-# only then descend — the descent initial condition is then EXACTLY the verified one.
-# If the stand check fails, re-engage the ONNX from its verified cold-start condition
-# (phase=[0,pi], last_action=0 — how every walk rollout begins) and retry ALIGN.
-FREEZE_RAMP_S = 0.4
-FREEZE_WAIT_MAX = 3.0            # after the ramp, POLL every tick for the first stable
-                                 # instant (the cut leaves a decaying lateral sway — a
-                                 # fixed 1.0 s check landed mid-oscillation and failed)
-FREEZE_SPEED_MAX = 0.10          # m/s |pelvis local vx|,|vy|
-FREEZE_ROLL_MAX, FREEZE_PITCH_MAX = 3.0, 10.0   # deg
 
 # --- scripted sit (verified in g1_sit_scripted.py; basin swept to 0.08 m / +-45 deg) ---
 HIP_PITCH, KNEE, ANKLE_PITCH = -1.254, +1.611, +0.137
-T_DESCENT, T_HOLD = 1.0, 3.0
+T_DESCENT, T_HOLD = 0.7, 3.0   # 0.7 s: the march-cut entry advances the topple
+                               # countdown, so the seat catch must come sooner
+                               # (1.0 s entry from a march toppled at pitch +62;
+                               # 0.6/0.7 s re-verified SEATED-STABLE across the
+                               # basin spot-checks)
 LEG_IDX = ((0, 3, 4), (6, 9, 10))    # (hip_pitch, knee, ankle_pitch) ctrl indices, L / R
 
 FPS = 20
@@ -158,29 +175,21 @@ def roll_deg(d):
     return float(np.degrees(np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))))
 
 
+def wrap(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+CHAIR_GEOMS = ("seat", "backrest", "chair_leg0", "chair_leg1", "chair_leg2", "chair_leg3")
+ROBOT_SUPPORT_GEOMS = ("pelvis_collision", "torso_collision") + g1_sit_env.ROBOT_LEG_GEOMS
+
+
 def build_scene(sim_dt=0.002):
-    """Playground G1 feetonly flat terrain + chair geoms (seat at SEAT_WORLD) + obstacles."""
+    """Playground G1 feetonly flat terrain + REAL collidable chair + obstacles."""
     assets = g1_base.get_assets()
     spec = mujoco.MjSpec.from_string(consts.FEET_ONLY_FLAT_TERRAIN_XML.read_text(), assets)
 
-    # seat — same dims/rgba as g1_sit_env, relocated to SEAT_WORLD
-    seat = spec.worldbody.add_geom()
-    seat.name = "seat"
-    seat.type = mujoco.mjtGeom.mjGEOM_BOX
-    seat.size = list(g1_sit_env.SEAT_HALF)
-    seat.pos = [SEAT_WORLD[0], SEAT_WORLD[1], g1_sit_env.SEAT_TOP - g1_sit_env.SEAT_HALF[2]]
-    seat.rgba = [0.55, 0.38, 0.22, 1.0]
-    seat.contype, seat.conaffinity = 1, 1
-
-    # pelvis collision box — exactly as g1_sit_env._add_chair_geoms
-    pelvis = [b for b in spec.bodies if b.name == "pelvis"][0]
-    pc = pelvis.add_geom()
-    pc.name = "pelvis_collision"
-    pc.type = mujoco.mjtGeom.mjGEOM_BOX
-    pc.size = list(g1_sit_env.PELVIS_COL_SIZE)
-    pc.pos = list(g1_sit_env.PELVIS_COL_POS)
-    pc.rgba = [0.8, 0.2, 0.2, 0.4]
-    pc.contype, pc.conaffinity = 1, 1
+    # realistic chair (board + backrest + 4 legs) + pelvis/torso proxies + leg<->chair pairs
+    g1_sit_env.add_real_chair_geoms(spec, center_xy=tuple(SEAT_WORLD), yaw=CHAIR_YAW)
 
     # obstacles — geom group 4 (the VFH rays are masked to this group), physical to the pelvis
     for name, ox, oy, kind, sx, sy, hh, rgba in OBSTACLES:
@@ -252,8 +261,9 @@ def main():
 
     default_pose = np.array(m.key_qpos[key][7:])
     imu_site = m.site("imu_in_pelvis").id
-    seat_gid = m.geom("seat").id
-    pelv_gid = m.geom("pelvis_collision").id
+    chair_gids = {m.geom(n).id for n in CHAIR_GEOMS}
+    lfoot_gid, rfoot_gid = m.geom("left_foot").id, m.geom("right_foot").id
+    support_gids = {m.geom(n).id for n in ROBOT_SUPPORT_GEOMS}
     lo, hi = m.actuator_ctrlrange[:, 0], m.actuator_ctrlrange[:, 1]
 
     sit_target = default_pose.copy()
@@ -285,14 +295,14 @@ def main():
                 f"{SEAT_WORLD[0]:.2f},{SEAT_WORLD[1]:.2f})"]
     print(timeline[0])
     durations = {}
-    navigated = False
+    navigated, turned = False, False
     fell, fail = False, None
     min_clear = float("inf")
     clear_per_obs = {name: float("inf") for name, *_ in OBSTACLES}
     align_hold = 0.0
     settle_t0, settle_xy0 = None, None
     waiting_calm, calm_t0 = False, 0.0
-    freeze_t0, freeze_ctrl0 = None, None
+    calm_streak = 0.0
     retries = 0
     sit_t0, sit_ctrl0, hold_t0 = None, None, None
     sit_yaw_deg, sit_err_cm = None, None
@@ -310,13 +320,14 @@ def main():
         # --- pre-step pose / errors ---
         x, y = float(d.qpos[0]), float(d.qpos[1])
         yaw = yaw_of(d)
+        yerr = wrap(yaw - YAW_TARGET)                   # heading error vs the seated heading
         exw, eyw = DOCK_WORLD[0] - x, DOCK_WORLD[1] - y
         dist = float(np.hypot(exw, eyw))
         ex = np.cos(yaw) * exw + np.sin(yaw) * eyw      # error in the base yaw frame
         ey = -np.sin(yaw) * exw + np.cos(yaw) * eyw
 
         # --- control ---
-        if state in ("NAVIGATE", "ALIGN", "SETTLE"):
+        if state in ("NAVIGATE", "TURN", "ALIGN", "SETTLE"):
             if state == "NAVIGATE":
                 vx, wz = plan()
                 vx *= float(np.clip(dist / 1.5, 0.30, 1.0))   # approach slowdown (curvature)
@@ -325,17 +336,26 @@ def main():
                     print(f"    DBG t={t:6.2f} NAV pos=({x:+.2f},{y:+.2f}) "
                           f"yaw={np.degrees(yaw):+5.0f} dist={dist:.2f} "
                           f"cmd=({vx:+.2f},{wz:+.2f})")
+            elif state == "TURN":     # turn in place: back to the chair
+                cmd = np.array([TRIM_VX, TRIM_VY,
+                                float(np.clip(-1.2 * yerr, -0.6, 0.6))])
             elif state == "ALIGN":
                 if dist < ALIGN_DEADBAND:
                     svx = svy = 0.0
                 else:
-                    svx = float(np.clip(1.2 * ex, -0.35, 0.35))
+                    svx = float(np.clip(1.2 * ex, -0.30, 0.35))   # mostly backward here
                     svy = float(np.clip(1.2 * ey, -0.25, 0.25))
-                swz = (0.0 if abs(yaw) < YAW_DEADBAND
-                       else float(np.clip(-1.2 * yaw, -0.5, 0.5)))
+                swz = (0.0 if abs(yerr) < YAW_DEADBAND
+                       else float(np.clip(-1.2 * yerr, -0.5, 0.5)))
                 cmd = np.array([TRIM_VX + svx, TRIM_VY + svy, swz])
-            else:  # SETTLE — calibrated stationary march-in-place
-                cmd = np.array([TRIM_VX, TRIM_VY, 0.0])
+            else:  # SETTLE — station-keeping march: trim + SMALL closed-loop position
+                # servo. Pure open-loop trim drifted ~3 cm/s backward INTO the chair here:
+                # the calibrated creep bias is heading/history dependent (it was measured
+                # facing +x after forward walking; this march follows BACKWARD walking).
+                svx = float(np.clip(1.0 * ex, -0.12, 0.12))
+                svy = float(np.clip(1.0 * ey, -0.08, 0.08))
+                swz = float(np.clip(-0.8 * yerr, -0.2, 0.2))
+                cmd = np.array([TRIM_VX + svx, TRIM_VY + svy, swz])
 
             # 103-dim obs, EXACTLY the verified recipe (g1_walk_onnx.py)
             linvel = d.sensor("local_linvel_pelvis").data
@@ -350,9 +370,6 @@ def main():
             last_action = action.copy()
             d.ctrl[:] = np.clip(action * ACTION_SCALE + default_pose, lo, hi)
             phase = np.fmod(phase + phase_dt + np.pi, 2 * np.pi) - np.pi
-        elif state == "FREEZE":
-            alpha = min(1.0, (t - freeze_t0) / FREEZE_RAMP_S)
-            d.ctrl[:] = np.clip(freeze_ctrl0 + alpha * (default_pose - freeze_ctrl0), lo, hi)
         elif state == "SIT":
             alpha = min(1.0, (t - sit_t0) / T_DESCENT)
             d.ctrl[:] = np.clip(sit_ctrl0 + alpha * (sit_target - sit_ctrl0), lo, hi)
@@ -369,9 +386,10 @@ def main():
         x, y, z = float(d.qpos[0]), float(d.qpos[1]), float(d.qpos[2])
         pitch = pitch_deg(d)
         yaw = yaw_of(d)
+        yerr = wrap(yaw - YAW_TARGET)
         dist = float(np.hypot(DOCK_WORLD[0] - x, DOCK_WORLD[1] - y))
 
-        if state in ("NAVIGATE", "ALIGN", "SETTLE", "FREEZE"):
+        if state in ("NAVIGATE", "TURN", "ALIGN", "SETTLE"):
             for name, ox, oy, kind, sx, sy, hh, rgba in OBSTACLES:
                 r = float(np.hypot(sx, sy)) if kind == "box" else sx   # circumscribed radius
                 c = float(np.hypot(x - ox, y - oy)) - r
@@ -381,6 +399,10 @@ def main():
             if z < 0.4 or abs(pitch) > 60:
                 fell = True
                 fail = f"fell during {state} (pelvis_z={z:.3f}, pitch={pitch:+.1f} deg)"
+            elif z < 0.62 and abs(pitch) > 25:
+                fail = (f"propped/stuck on the chair during {state} "
+                        f"(pelvis_z={z:.3f}, pitch={pitch:+.1f} deg) — unrecoverable "
+                        f"for the walk policy, aborting honestly")
             if DEBUG and state == "SETTLE":
                 lv = d.sensor("local_linvel_pelvis").data
                 gy = d.sensor("gyro_pelvis").data
@@ -393,15 +415,15 @@ def main():
             force, ncon = 0.0, 0
             for i in range(d.ncon):
                 c = d.contact[i]
-                if {c.geom1, c.geom2} == {seat_gid, pelv_gid}:
+                if ((c.geom1 in chair_gids and c.geom2 in support_gids)
+                        or (c.geom2 in chair_gids and c.geom1 in support_gids)):
                     mujoco.mj_contactForce(m, d, i, f6)
                     force += f6[0]       # normal component
                     ncon += 1
             seat_hist.append((t, z, pitch, force, ncon))
             if DEBUG and k % 5 == 0:
-                px, py, pz = d.geom_xpos[pelv_gid]
-                print(f"    DBG t={t:6.2f} {state:4s} relseat=({px - SEAT_WORLD[0]:+.3f},"
-                      f"{py - SEAT_WORLD[1]:+.3f}) base_z={z:.3f} pbox_z={pz:.3f} "
+                print(f"    DBG t={t:6.2f} {state:4s} reldock=({x - DOCK_WORLD[0]:+.3f},"
+                      f"{y - DOCK_WORLD[1]:+.3f}) base_z={z:.3f} "
                       f"pitch={pitch:+6.1f} roll={roll_deg(d):+6.1f} "
                       f"F={force:6.1f} ncon={ncon}")
 
@@ -417,7 +439,7 @@ def main():
             timeline.append(msg)
             break
 
-        if state in ("NAVIGATE", "ALIGN", "SETTLE", "FREEZE") and t > WALK_GUARD_T:
+        if state in ("NAVIGATE", "TURN", "ALIGN", "SETTLE") and t > WALK_GUARD_T:
             fail = (f"did not reach SIT by t={WALK_GUARD_T:.0f}s "
                     f"(state={state}, dist={dist:.2f} m)")
             timeline.append(f"[t={t:6.2f}s] ABORT: {fail}")
@@ -427,44 +449,57 @@ def main():
         if state == "NAVIGATE":
             if dist < NAV_EXIT_DIST:
                 navigated = True
-                goto("ALIGN", f"dist={dist:.2f} m < {NAV_EXIT_DIST:.1f} m")
+                goto("TURN", f"dist={dist:.2f} m < {NAV_EXIT_DIST:.1f} m — "
+                             f"turn 180 deg, back to the chair")
             elif t > NAV_TIMEOUT:
                 fail = f"NAVIGATE timeout (dist still {dist:.2f} m at t={t:.1f}s)"
                 timeline.append(f"[t={t:6.2f}s] ABORT: {fail}")
                 print(timeline[-1])
                 break
+        elif state == "TURN":
+            if abs(yerr) < TURN_EXIT:
+                turned = True
+                goto("ALIGN", f"heading {np.degrees(yerr):+.0f} deg from seated yaw — "
+                              f"back up to the dock point")
         elif state == "ALIGN":
             align_hold = (align_hold + CTRL_DT
-                          if dist < ALIGN_TOL and abs(yaw) < YAW_TOL else 0.0)
+                          if dist < ALIGN_TOL and abs(yerr) < YAW_TOL else 0.0)
             if align_hold >= ALIGN_HOLD_S:
                 align_hold = 0.0
                 settle_t0, settle_xy0 = t, np.array([x, y])
                 waiting_calm = False
                 goto("SETTLE", f"|err|={dist * 100:.1f} cm < {ALIGN_TOL * 100:.1f} cm "
-                               f"held {ALIGN_HOLD_S:.1f}s; yaw={np.degrees(yaw):+.0f} deg")
+                               f"held {ALIGN_HOLD_S:.1f}s; yaw_err={np.degrees(yerr):+.0f} deg")
         elif state == "SETTLE":
-            if not waiting_calm and t - settle_t0 >= SETTLE_S:
+            if dist > 0.08 and retries < MAX_SETTLE_RETRIES:
+                # drifted way off mid-settle (e.g. backward INTO the chair) — bail out
+                # early, BEFORE the legs reach the board edge
+                retries += 1
+                waiting_calm = False
+                goto("ALIGN", f"drifted to {dist * 100:.1f} cm mid-settle — "
+                              f"retry {retries}/{MAX_SETTLE_RETRIES}")
+            elif not waiting_calm and t - settle_t0 >= SETTLE_S:
                 speed = float(np.linalg.norm(np.array([x, y]) - settle_xy0)
                               / (t - settle_t0))
                 if (speed < SETTLE_SPEED_MAX and dist < ALIGN_TOL
-                        and abs(yaw) < YAW_TOL):
-                    waiting_calm, calm_t0 = True, t
+                        and abs(yerr) < YAW_TOL):
+                    waiting_calm, calm_t0, calm_streak = True, t, 0.0
                 elif retries < MAX_SETTLE_RETRIES:
                     retries += 1
                     goto("ALIGN", f"settle check failed (drift={speed:.2f} m/s, "
-                                  f"err={dist * 100:.1f} cm, yaw={np.degrees(yaw):+.0f} deg) "
+                                  f"err={dist * 100:.1f} cm, yaw_err={np.degrees(yerr):+.0f} deg) "
                                   f"— retry {retries}/{MAX_SETTLE_RETRIES}")
-                elif dist < 0.08 and abs(yaw) < YAW_HARD:   # hard basin budget — warn & go
-                    waiting_calm, calm_t0 = True, t
+                elif dist < DIST_HARD and abs(yerr) < YAW_HARD:  # hard basin budget — warn & go
+                    waiting_calm, calm_t0, calm_streak = True, t, 0.0
                     msg = (f"[t={t:6.2f}s] WARN: settle retries exhausted, err="
-                           f"{dist * 100:.1f} cm / yaw {np.degrees(yaw):+.0f} deg within "
-                           f"the 8 cm / 45 deg hard budget — proceeding")
+                           f"{dist * 100:.1f} cm / yaw_err {np.degrees(yerr):+.0f} deg within "
+                           f"the hard budget — proceeding")
                     print(msg)
                     timeline.append(msg)
                 else:
                     fail = (f"settle retries exhausted, err={dist * 100:.1f} cm / "
-                            f"yaw {np.degrees(yaw):+.0f} deg outside the "
-                            f"8 cm / +-45 deg docking basin")
+                            f"yaw_err {np.degrees(yerr):+.0f} deg outside the "
+                            f"verified docking basin")
                     timeline.append(f"[t={t:6.2f}s] ABORT: {fail}")
                     print(timeline[-1])
                     break
@@ -473,58 +508,56 @@ def main():
                 gy = d.sensor("gyro_pelvis").data
                 lf = d.sensor("left_foot_floor_found").data[0] > 0
                 rf = d.sensor("right_foot_floor_found").data[0] > 0
-                calm = (lf and rf
-                        and abs(lv[0]) < CALM_VX and abs(lv[1]) < CALM_VY
+                pL, pR = d.geom_xpos[lfoot_gid], d.geom_xpos[rfoot_gid]
+                dxf = float(np.cos(yaw) * (pL[0] - pR[0])
+                            + np.sin(yaw) * (pL[1] - pR[1]))
+                calm = (lf and rf and abs(dxf) < FEET_ABREAST
+                        and -CALM_VX_TOWARD < lv[0] < CALM_VX_AWAY
+                        and abs(lv[1]) < CALM_VY
                         and abs(gy[0]) < CALM_GYRO and abs(gy[1]) < CALM_GYRO
                         and abs(roll_deg(d)) < CALM_ROLL)
+                if DEBUG and k % 3 == 0:
+                    print(f"    DBG t={t:6.2f} CALMGATE dxf={dxf:+.3f} "
+                          f"lv=({lv[0]:+.2f},{lv[1]:+.2f}) gy=({gy[0]:+.2f},{gy[1]:+.2f}) "
+                          f"roll={roll_deg(d):+4.1f} L={int(lf)} R={int(rf)}")
                 timed_out = t - calm_t0 >= CALM_WAIT_MAX
-                if ((calm or timed_out) and abs(yaw) > YAW_HARD
-                        and retries < MAX_SETTLE_RETRIES):
-                    retries += 1     # yaw drifted out of the basin during the calm wait
-                    goto("ALIGN", f"yaw {np.degrees(yaw):+.0f} deg drifted outside the "
-                                  f"+-45 deg basin during calm wait — retry "
-                                  f"{retries}/{MAX_SETTLE_RETRIES}")
-                elif calm or timed_out:
-                    freeze_t0, freeze_ctrl0 = t, d.ctrl.copy()
-                    goto("FREEZE", f"{'both-feet sway-calm' if calm else 'calm-wait TIMEOUT'} "
-                                   f"(lvel=({lv[0]:+.2f},{lv[1]:+.2f}), roll={roll_deg(d):+.1f} deg, "
-                                   f"L={int(lf)} R={int(rf)}), err={dist * 100:.1f} cm, "
-                                   f"yaw={np.degrees(yaw):+.0f} deg — ONNX off, "
-                                   f"ramp to keyframe stand")
-        elif state == "FREEZE":
-            if t - freeze_t0 >= FREEZE_RAMP_S:
-                lv = d.sensor("local_linvel_pelvis").data
-                lf = d.sensor("left_foot_floor_found").data[0] > 0
-                rf = d.sensor("right_foot_floor_found").data[0] > 0
-                stable = (lf and rf
-                          and abs(lv[0]) < FREEZE_SPEED_MAX and abs(lv[1]) < FREEZE_SPEED_MAX
-                          and abs(roll_deg(d)) < FREEZE_ROLL_MAX
-                          and abs(pitch) < FREEZE_PITCH_MAX
-                          and dist < 0.08 and abs(yaw) < YAW_HARD)
-                if stable:
+                in_budget = dist < 0.05 and abs(yerr) < YAW_HARD   # direct-commit: tight
+                # NEVER cut while out of budget or still moving: attempt #4 cut
+                # on a calm-wait timeout at err 14 cm / -0.11 m/s, backed into the chair
+                # mid-freeze and got propped on the seat edge — unrecoverable for the
+                # walk policy. Budget+calm are mandatory; timeout means retry, and an
+                # uncalm last-resort cut is allowed only IN budget with retries spent.
+                if calm and in_budget:
+                    # CUT STRAIGHT INTO THE DESCENT — no stand in between. The open-loop
+                    # keyframe stand is an unsteerable ~1 s glide window (measured: it
+                    # topples in ~2 s, never kills the cut momentum, and 0.1 m/s of glide
+                    # = a 10 cm miss). Descending immediately shrinks the uncontrolled
+                    # exposure to ~0.55 s and the seat itself kills the residual motion.
                     sit_t0, sit_ctrl0 = t, d.ctrl.copy()
-                    sit_yaw_deg, sit_err_cm = float(np.degrees(yaw)), dist * 100
-                    goto("SIT", f"static stand verified after "
-                                f"{t - freeze_t0:.2f}s (lvel=({lv[0]:+.2f},{lv[1]:+.2f}), "
-                                f"roll={roll_deg(d):+.1f}, pitch={pitch:+.1f} deg), "
-                                f"err={dist * 100:.1f} cm, yaw={np.degrees(yaw):+.0f} deg "
-                                f"— verified scripted descent")
-                elif t - freeze_t0 >= FREEZE_WAIT_MAX:
+                    sit_yaw_deg, sit_err_cm = float(np.degrees(yerr)), dist * 100
+                    goto("SIT", f"both-feet sway-calm "
+                                f"(lvel=({lv[0]:+.2f},{lv[1]:+.2f}), roll={roll_deg(d):+.1f} deg, "
+                                f"L={int(lf)} R={int(rf)}), err={dist * 100:.1f} cm, "
+                                f"yaw_err={np.degrees(yerr):+.0f} deg — ONNX off, "
+                                f"direct scripted descent")
+                elif timed_out:
                     if retries < MAX_SETTLE_RETRIES:
                         retries += 1
-                        # verified ONNX cold-start condition, then trim-march to recover
-                        phase = np.array([0.0, np.pi])
-                        last_action = np.zeros(m.nu, dtype=np.float32)
-                        settle_t0, settle_xy0 = t, np.array([x, y])
-                        waiting_calm = False
-                        goto("SETTLE", f"stand never stabilized in {FREEZE_WAIT_MAX:.0f}s "
-                                       f"(lvel=({lv[0]:+.2f},{lv[1]:+.2f}), "
-                                       f"roll={roll_deg(d):+.1f}, pitch={pitch:+.1f}, "
-                                       f"L={int(lf)} R={int(rf)}, err={dist * 100:.1f} cm, "
-                                       f"yaw={np.degrees(yaw):+.0f} deg) — ONNX re-engaged "
-                                       f"trim march, retry {retries}/{MAX_SETTLE_RETRIES}")
+                        goto("ALIGN", f"calm-wait timeout ({'out of budget: ' if not in_budget else ''}"
+                                      f"err={dist * 100:.1f} cm, yaw_err={np.degrees(yerr):+.0f} deg, "
+                                      f"lvel=({lv[0]:+.2f},{lv[1]:+.2f})) — retry "
+                                      f"{retries}/{MAX_SETTLE_RETRIES}")
+                    elif in_budget:
+                        msg = (f"[t={t:6.2f}s] WARN: never calm, retries spent, but in budget "
+                               f"(err={dist * 100:.1f} cm) — last-resort cut")
+                        print(msg)
+                        timeline.append(msg)
+                        sit_t0, sit_ctrl0 = t, d.ctrl.copy()
+                        sit_yaw_deg, sit_err_cm = float(np.degrees(yerr)), dist * 100
+                        goto("SIT", "last-resort cut — ONNX off, direct scripted descent")
                     else:
-                        fail = "freeze stand never verified and retries exhausted"
+                        fail = (f"never calm and out of budget (err={dist * 100:.1f} cm, "
+                                f"yaw_err={np.degrees(yerr):+.0f} deg), retries exhausted")
                         timeline.append(f"[t={t:6.2f}s] ABORT: {fail}")
                         print(timeline[-1])
                         break
@@ -558,9 +591,9 @@ def main():
         force_f, ncon_f, force_mean1 = 0.0, 0, 0.0
     on_seat = ncon_f > 0
     held = hold_t0 is not None and t - hold_t0 >= T_HOLD - 1e-9
-    seated = (abs(pelvis_z - sit_z) < 0.08 and abs(pitch_f) < 30
+    seated = (abs(pelvis_z - sit_z) < 0.06 and abs(pitch_f) < 30
               and on_seat and force_f > 80.0)
-    success = (navigated and not fell and fail is None and min_clear > 0
+    success = (navigated and turned and not fell and fail is None and min_clear > 0
                and held and seated)
 
     if frames:
@@ -569,25 +602,25 @@ def main():
                        duration=int(1000 / FPS), loop=0, optimize=True)
 
     print()
-    print("=== G1 autonomous WALK -> AVOID -> ALIGN -> SIT (one continuous rollout) ===")
+    print("=== G1 autonomous WALK -> AVOID -> TURN -> BACK-UP -> SIT (real chair, one rollout) ===")
     print("state durations: " + "  ".join(f"{s}={v:.2f}s" for s, v in durations.items()))
-    print(f"navigated            = {navigated}   fell = {fell}")
+    print(f"navigated            = {navigated}   turned = {turned}   fell = {fell}")
     print("min obstacle clearance (NAVIGATE, base-to-axis minus radius): "
           f"{min_clear:.3f} m  " +
           " ".join(f"[{n}:{v:.2f}]" for n, v in clear_per_obs.items()))
     if sit_err_cm is not None:
         print(f"docking at SIT entry = {sit_err_cm:.1f} cm from the nominal dock point, "
-              f"yaw {sit_yaw_deg:+.1f} deg (basin: 8 cm / +-45 deg)")
+              f"yaw_err {sit_yaw_deg:+.1f} deg (verified basin: +8/-5 cm, +-20 deg)")
     print(f"pelvis_z_final       = {pelvis_z:.4f}  (target {sit_z:.4f})")
     print(f"pitch_deg_final      = {pitch_f:+.2f}")
-    print(f"on_seat              = {on_seat}  ({ncon_f} seat-pelvis contacts)")
-    print(f"seat_force_N         = {force_f:.1f}  (mean last 1 s {force_mean1:.1f} N)")
+    print(f"on_chair             = {on_seat}  ({ncon_f} chair-robot contacts)")
+    print(f"chair_force_N        = {force_f:.1f}  (mean last 1 s {force_mean1:.1f} N)")
     print(f"held_3s              = {held}")
     if frames:
         print(f"gif: {GIF_PATH} ({os.path.getsize(GIF_PATH) / 1e6:.2f} MB, "
               f"{len(frames)} frames)")
     if success:
-        print("RESULT: AUTONOMOUS WALK→AVOID→SIT ✓")
+        print("RESULT: AUTONOMOUS WALK→AVOID→TURN→SIT (REAL CHAIR) ✓")
     else:
         stage = fail if fail else (
             "SIT/HOLD: not seated "
