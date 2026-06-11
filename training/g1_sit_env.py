@@ -160,6 +160,93 @@ def build_real_chair_model(sim_dt=0.002, center_xy=(0.0, 0.0), yaw=0.0):
     return m
 
 
+# --- REAL-WORLD chair: ３階講堂遠隔操作席, imported from FBX via the g1-isu pipeline ----
+# assets/real_chair/ = 153 convex-decomposed collision hulls + 1 visual mesh +
+# chair_info.json (auto-detected seat center/height/facing, in the CHAIR frame).
+# Facts (chair_info.json): seat top 0.6483 m, seat center (0.0008, -0.1029, 0.6483),
+# sitter faces ~+y, integrated footrest platform (the robot CANNOT sit from the floor:
+# its standing pelvis bottom is 0.600 m < the 0.648 m seat — the platform is mandatory).
+import json as _json
+import os as _os
+
+REAL_CHAIR_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                               "assets", "real_chair")
+
+
+def load_fbx_chair_info():
+    with open(_os.path.join(REAL_CHAIR_DIR, "chair_info.json")) as f:
+        return _json.load(f)
+
+
+def add_fbx_chair_geoms(spec, center_xy=(0.0, 0.0), yaw=0.0, pair_legs=True):
+    """Add the FBX-imported real chair (static body, 153 convex hulls + visual mesh)
+    at center_xy with the whole chair frame rotated by `yaw`, plus the pelvis/torso
+    collision proxies and (optionally) explicit robot-leg<->hull contact pairs.
+    Returns the list of hull geom names."""
+    import math
+    body = spec.worldbody.add_body()
+    body.name = "real_chair"
+    body.pos = [center_xy[0], center_xy[1], 0.0]
+    body.quat = [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
+
+    vis = spec.add_mesh()
+    vis.name = "rc_visual"
+    vis.file = _os.path.join(REAL_CHAIR_DIR, "visual", "chair_visual.obj")
+    g = body.add_geom()
+    g.name = "rc_visual"
+    g.type = mujoco.mjtGeom.mjGEOM_MESH
+    g.meshname = "rc_visual"
+    g.contype, g.conaffinity = 0, 0
+    g.group = 2
+    g.rgba = [0.35, 0.40, 0.50, 1.0]
+
+    names = []
+    files = sorted(_os.listdir(_os.path.join(REAL_CHAIR_DIR, "collision")))
+    for f in files:
+        if not f.endswith(".obj"):
+            continue
+        mesh = spec.add_mesh()
+        mesh.name = f"rc_{f[:-4]}"
+        mesh.file = _os.path.join(REAL_CHAIR_DIR, "collision", f)
+        g = body.add_geom()
+        g.name = f"rc_{f[:-4]}"
+        g.type = mujoco.mjtGeom.mjGEOM_MESH
+        g.meshname = mesh.name
+        g.contype, g.conaffinity = 1, 1     # collides with the pelvis box automatically
+        g.condim = 3
+        g.friction = [0.8, 0.02, 0.01]
+        g.group = 3
+        g.rgba = [0.6, 0.6, 0.65, 0.0]      # invisible: the visual mesh shows the chair
+        names.append(g.name)
+
+    _add_pelvis_collision(spec)
+    torso = [b for b in spec.bodies if b.name == "torso_link"][0]
+    tc = torso.add_geom()
+    tc.name = "torso_collision"
+    tc.type = mujoco.mjtGeom.mjGEOM_BOX
+    tc.size = [0.07, 0.10, 0.15]
+    tc.pos = [0.0, 0.0, 0.15]
+    tc.rgba = [0.8, 0.2, 0.2, 0.3]
+    tc.contype, tc.conaffinity = 0, 0
+
+    if pair_legs:
+        for rg in ROBOT_LEG_GEOMS + ("torso_collision",):
+            for cg in names:
+                spec.add_pair(geomname1=rg, geomname2=cg)
+    return names
+
+
+def build_fbx_chair_model(sim_dt=0.002, center_xy=(0.0, 0.0), yaw=0.0, pair_legs=True):
+    """Plain-MuJoCo G1 feetonly model WITH the real FBX chair + leg collision pairs."""
+    assets = g1_base.get_assets()
+    spec = mujoco.MjSpec.from_string(consts.FEET_ONLY_FLAT_TERRAIN_XML.read_text(), assets)
+    add_fbx_chair_geoms(spec, center_xy=center_xy, yaw=yaw, pair_legs=pair_legs)
+    spec.assets = assets
+    m = spec.compile()
+    m.opt.timestep = sim_dt
+    return m
+
+
 def build_plain_chair_model(sim_dt=0.002):
     """Plain-MuJoCo (C engine) G1 feetonly flat-terrain model WITH the chair — for Mac replay."""
     assets = g1_base.get_assets()

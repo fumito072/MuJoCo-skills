@@ -1,0 +1,44 @@
+{
+  "_comment": "Measured calibration of the REAL chair (３階講堂遠隔操作席) sit task, for the g1-isu RL pipeline. All numbers probe-measured in MuJoCo on 2026-06-11 with the mesh-calibrated G1 pelvis proxy (bottom = base-0.155 m). Chair frame: origin = chair_info origin, sitter faces +y.",
+  "seat_top_z_raycast": 0.635,
+  "_seat_note": "chair_info.json says 0.6483 (bbox-based); a downward raycast onto the cushion hulls gives 0.635 — use the raycast value for contact-relevant targets.",
+  "platform_top_z": 0.22,
+  "platform_extent": {"x": [-0.30, 0.30], "y": [0.20, 0.50]},
+  "seat_relative_height_from_platform": 0.415,
+  "robot_flat_sit_height": 0.39,
+  "_height_note": "0.415 > 0.39: the G1 cannot sit fully flat on this seat from a soft-gain descent (perches at pelvis pitch ~+16 deg). A STIFF-gain descent (kp=300) slides ~20 cm deep onto the cushion and lands flat (pitch ~0).",
+  "sit_pelvis_target": {
+    "_frame": "chair frame, base (pelvis) position when seated",
+    "y": 0.085,
+    "z": 0.800,
+    "yaw": 1.5708
+  },
+  "_sit_target_note": "g1-isu config.py uses sit_target = seat_center + 0.10 m z-offset => z 0.748 at y -0.103. MEASURED stable seated base is y +0.085, z 0.800 (the pelvis CENTER sits ~0.165 above the cushion top because the pelvis bottom is 0.155 below the base origin). Recommend updating the reward target to (0.0, 0.085, 0.80).",
+  "descent_recipe": {
+    "gains": {"kp": 300, "kd": 8, "_note": "SIT-mode leg gains; walking keeps the walk-policy gains. Same mode-switch mechanism as pretrained_walker.py (kp=500)."},
+    "joint_targets_stage1": {"hip_pitch": -1.254, "knee": 1.611, "ankle_pitch": 0.137},
+    "joint_targets_stage2": {"ankle_pitch": 0.0, "waist_pitch": -0.10},
+    "timing_s": {"stand": 0.4, "descent": 0.6, "seat_settle": 0.8, "pose": 1.5}
+  },
+  "platform_start_basin": {
+    "_frame": "spawn standing on the platform, facing +y, base position",
+    "y_range": [0.27, 0.37],
+    "x_range": [-0.05, 0.05],
+    "yaw_range_deg": [-8, 8],
+    "success_rate": "30/30 randomized spawns (training/g1_real_chair_sit.py G1RC_SWEEP)"
+  },
+  "seated_state": {
+    "base_z": 0.800,
+    "pelvis_pitch_deg": 0.1,
+    "torso_lean_deg": 6.3,
+    "chair_support_N": [120, 260],
+    "support_path": "pelvis box + both thighs on the cushion; feet stay on the footrest platform; armrests untouched"
+  },
+  "reward_shaping_hints": [
+    "yaw budget is TIGHT: static descents survive +-10 deg but 15 deg topples (armrest/cushion-edge interaction) — penalize |yaw - pi/2| beyond ~0.15 rad strongly",
+    "away-from-seat drift at descent start is unrecoverable (sat into empty air at 0.12 m/s); toward-seat drift is safe (the seat catches it) — asymmetric velocity shaping",
+    "the cushion front edge (y ~0.15, curved hulls) deflects landings sideways: reward deep landings (pelvis y < 0.12) over edge perches",
+    "feet must stay on the platform (y in [0.20, 0.50]): a heel past y<0.20 hangs off the edge"
+  ],
+  "demos": "demos/real_chair_sit/demo_*.npz — 30 successful platform-start sits, 50 Hz (qpos nq=36, qvel nv=35, ctrl nu=29, dt, spawn offsets, sit gains). State-level (gain-agnostic); replay/relabel in the g1-isu env for BC/DeepMimic-style imitation."
+}
