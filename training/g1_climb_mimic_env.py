@@ -145,7 +145,9 @@ class G1ClimbMimicEnv(gym.Env):
         base_err = float(1.0 * d.qpos[0] ** 2 + (d.qpos[1] - rb[0]) ** 2
                  + 1.5 * (d.qpos[2] - rb[1]) ** 2)   # x_ref = 0 (lateral
                  # flee was the first exploit found in this reward)
-        r = 1.2 * np.exp(-8.0 * leg_err) + 1.0 * np.exp(-20.0 * base_err)
+        # PRODUCT form: leg mimicry pays NOTHING unless the body is on the
+        # reference path (additive form bred wall-hugging leg-pose farming)
+        r = 2.2 * np.exp(-8.0 * leg_err) * np.exp(-15.0 * base_err)
         r -= 0.15 * abs(ye)
         r -= 0.10 * (abs(np.radians(roll)) + abs(np.radians(pitch)))
         r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
@@ -161,7 +163,7 @@ class G1ClimbMimicEnv(gym.Env):
             r += 100.0
             terminated = True
             info["success"] = True
-        elif d.qpos[2] < 0.40 or abs(roll) > 55 or abs(pitch) > 65 or abs(d.qpos[0]) > 0.45:
+        elif d.qpos[2] < 0.40 or abs(roll) > 55 or abs(pitch) > 65 or abs(d.qpos[0]) > 0.30:
             r -= 20.0
             terminated = True
         elif self._k >= REF_N + int(EXTRA_S / CTRL_DT):

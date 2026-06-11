@@ -33,6 +33,7 @@ DEF = np.array(m.key_qpos[key][7:19])    # 12 leg joints, keyframe
 
 # (t, legs{idx: val}, base_y, base_z) — forward climb facing -y (toward the chair),
 # RIGHT leg leads. Joint numbers from the kinematic probes (2026-06-11).
+TSCALE = 1.6   # slower = closer to quasi-static = trackable
 KEY_FRAMES = [
     (0.0, {},                                                0.68, 0.755),
     (0.6, {},                                                0.68, 0.755),  # settle
@@ -48,6 +49,7 @@ KEY_FRAMES = [
     (5.2, {},                                                0.40, 0.975),  # hold stand
 ]
 
+KEY_FRAMES = [(t * TSCALE, d_, y, z) for t, d_, y, z in KEY_FRAMES]
 T = KEY_FRAMES[-1][0]
 N = int(T / DT) + 1
 legs = np.zeros((N, 12))
