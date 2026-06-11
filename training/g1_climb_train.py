@@ -24,9 +24,12 @@ RUNS = os.path.join(REPO, "runs_climb")
 
 def make_env(rank):
     def _f():
-        from g1_climb_env import G1ClimbEnv
         from stable_baselines3.common.monitor import Monitor
-        return Monitor(G1ClimbEnv(seed=1000 + rank), info_keywords=("success",))
+        if os.environ.get("MIMIC"):
+            from g1_climb_mimic_env import G1ClimbMimicEnv as Env
+        else:
+            from g1_climb_env import G1ClimbEnv as Env
+        return Monitor(Env(seed=1000 + rank), info_keywords=("success",))
     return _f
 
 
