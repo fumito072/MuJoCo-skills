@@ -36,7 +36,12 @@ EP_SECONDS = 6.0
 YAW_TARGET = np.pi / 2
 TARGET = np.array([0.0, 0.33])        # platform stand point = sit-descent basin center
 PLATFORM_Z = 0.22
-SPAWN_Y, SPAWN_NOISE = 0.67, (0.04, 0.03, 0.10)   # (x, y, yaw) noise amplitudes
+SPAWN_Y, SPAWN_NOISE = 0.68, (0.04, 0.03, 0.10)   # (x, y, yaw) noise amplitudes
+# FORWARD-approach variant (user insight: the body is fore-aft ASYMMETRIC — toe-first
+# landings load naturally, heel-first backward landings fight the foot lever): spawn
+# FACING the step; success still requires facing +y (back to the seat) on the platform,
+# so the policy may climb-then-pivot or pivot-while-climbing — its choice.
+SPAWN_YAW = -np.pi / 2
 SIT_KP, SIT_KD = 300.0, 8.0
 
 
@@ -144,7 +149,7 @@ class G1ClimbEnv(gym.Env):
             self._prev_pot = self._potential()
             return self._obs(), {}
         nx, ny, nyaw = (self.rng.uniform(-a, a) for a in SPAWN_NOISE)
-        yaw0 = YAW_TARGET + nyaw
+        yaw0 = SPAWN_YAW + nyaw
         self.d.qpos[0:3] = (nx, SPAWN_Y + ny, 0.755)
         self.d.qpos[3:7] = (np.cos(yaw0 / 2), 0, 0, np.sin(yaw0 / 2))
         # the chain hands over FROM A MARCH: expose initial base/joint motion so the
