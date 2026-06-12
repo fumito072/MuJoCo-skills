@@ -25,6 +25,18 @@ within the Joystick step plumbing).
 The playground feet are contype=0 (floor contact via explicit pairs only), so
 the platform gets explicit pairs to feet+shins+thighs — without them the robot
 falls THROUGH the box (the same trap the CPU chair import hit).
+
+HAND-BRACE UPGRADE (2026-06-13, from training/g1_handbrace_probe.py): the Mac
+probe proved a quasi-static 4-point BRIDGE — lean ~34 deg, both hands pressed
+on the armrest fronts at ~50 N each — but every OPEN-LOOP step-up from it
+breaks the point-contact hands. Feedback is exactly what RL provides, so this
+env now lets the policy discover hand bracing:
+  * simplified armrest boxes (catch-zone tops ~0.97, where the probe's hands
+    actually rest) + seat box (0.635) with hand-only contact pairs,
+  * probe-matched arm mode gains baked in (shoulders/elbows kp=150, wrists
+    kp=80 — stock kp=2 wrists flop and slide off the rests),
+  * 25% of resets start IN the measured bridge state (RSI: the hard part —
+    reaching the brace — is given; PPO only has to finish the step-up).
 """
 import jax
 import jax.numpy as jp
@@ -47,6 +59,27 @@ SPAWN_FLOOR_Y = 0.68
 SIT_KP, SIT_KD = 300.0, 8.0
 LEG_GEOMS = ("left_thigh", "right_thigh", "left_shin", "right_shin",
              "left_foot", "right_foot")
+HAND_GEOMS = ("left_hand_collision", "right_hand_collision")
+
+# simplified brace surfaces (full-hull measurements; hands-only pairs).
+# armrest catch zone = where the probe's hands actually rest (surface ~0.98
+# at y ~0.13); the seat caught deeper falls at 0.635.
+ARMREST_HALF = (0.035, 0.18, 0.035)
+ARMREST_CENTERS = ((0.27, -0.03, 0.935), (-0.27, -0.03, 0.935))   # tops at 0.97
+SEAT_HALF = (0.20, 0.20, 0.03)
+SEAT_CENTER = (0.0, -0.05, 0.605)                                  # top at 0.635
+
+# measured 4-point bridge state (training/g1_handbrace_probe.py BRIDGE_T=7.0):
+# pitch ~34 deg, hands ~50 N each on the rests, qvel norm 0.08
+BRIDGE_QPOS = jp.array([
+    0.0052, 0.5000, 0.7053,                                        # base pos
+    0.6662, 0.2041, 0.2051, -0.6873,                               # quat (yaw -90 + pitch 34)
+    -0.4501, 0.0022, 0.0013, 0.8238, -0.4241, -0.0026,             # L leg
+    -0.4723, 0.0016, 0.0015, 0.8304, -0.4350, -0.0000,             # R leg
+    -0.0438, 0.0506, -0.5323,                                      # waist y/r/p
+    -0.4928, 0.9851, 0.0436, 0.0518, 0.0059, -0.0358, 0.0113,      # L arm
+    -0.4929, -0.9712, -0.0521, 0.0307, 0.0143, -0.1314, -0.0344,   # R arm
+])
 
 
 def climb_config():
@@ -98,6 +131,21 @@ class G1ClimbBox(g1_joystick.Joystick):
         g.contype, g.conaffinity = 1, 1
         for rg in LEG_GEOMS:                  # feet are contype=0: pairs are mandatory
             spec.add_pair(geomname1=rg, geomname2="platform")
+        # brace surfaces: pair-only (contype=0) and ONLY with the hands, so leg
+        # collision behavior is identical to the previous runs
+        braces = [("seat_brace", SEAT_HALF, SEAT_CENTER)]
+        for i, c in enumerate(ARMREST_CENTERS):
+            braces.append((f"armrest_{i}", ARMREST_HALF, c))
+        for name, half, center in braces:
+            b = spec.worldbody.add_geom()
+            b.name = name
+            b.type = mujoco.mjtGeom.mjGEOM_BOX
+            b.size = list(half)
+            b.pos = list(center)
+            b.rgba = [0.6, 0.55, 0.5, 1.0]
+            b.contype, b.conaffinity = 0, 0
+            for hg in HAND_GEOMS:
+                spec.add_pair(geomname1=hg, geomname2=name)
         spec.assets = assets
         m = spec.compile()
         m.opt.timestep = self.sim_dt
@@ -105,6 +153,16 @@ class G1ClimbBox(g1_joystick.Joystick):
             m.actuator_gainprm[a, 0] = SIT_KP
             m.actuator_biasprm[a, 1] = -SIT_KP
             m.actuator_biasprm[a, 2] = -SIT_KD
+        # probe-matched arm mode gains: a braced press needs stiff shoulders/
+        # elbows, and stock kp=2 wrists flop and roll off the rests
+        for a in (15, 16, 17, 18, 22, 23, 24, 25):
+            m.actuator_gainprm[a, 0] = 150.0
+            m.actuator_biasprm[a, 1] = -150.0
+            m.actuator_biasprm[a, 2] = -4.0
+        for a in (19, 20, 21, 26, 27, 28):
+            m.actuator_gainprm[a, 0] = 80.0
+            m.actuator_biasprm[a, 1] = -80.0
+            m.actuator_biasprm[a, 2] = -2.0
         m.vis.global_.offwidth, m.vis.global_.offheight = 1280, 720
         self._mj_model = m
         self._mjx_model = mjx.put_model(m, impl=self._config.impl)
@@ -122,7 +180,9 @@ class G1ClimbBox(g1_joystick.Joystick):
         qvel = jp.zeros(self.mjx_model.nv)
 
         rng, k_mode, k1, k2, k3, k4, k5 = jax.random.split(rng, 7)
-        on_platform = jax.random.bernoulli(k_mode, 0.4)
+        u = jax.random.uniform(k_mode)
+        bridge = u < 0.25                     # mode C: measured 4-point bridge (RSI)
+        on_platform = (u >= 0.25) & (u < 0.55)
 
         # mode A: floor, facing the step (-y), forward approach
         yaw_a = -jp.pi / 2 + jax.random.uniform(k1, (), minval=-0.10, maxval=0.10)
@@ -150,12 +210,21 @@ class G1ClimbBox(g1_joystick.Joystick):
             leg_crouch = leg_crouch.at[kn].add(crouch * 2.0)
             leg_crouch = leg_crouch.at[ap].add(-crouch * 0.6)
         joints = joints + jp.where(on_platform, leg_crouch, jp.zeros(29))
+
+        # mode C overrides: the probe's quasi-static brace, tighter noise so
+        # the pressed hands stay in contact
+        pos = jp.where(bridge, BRIDGE_QPOS[0:3], pos)
+        quat = jp.where(bridge, BRIDGE_QPOS[3:7], quat)
+        joints = jp.where(bridge, BRIDGE_QPOS[7:], joints)
         rng, k6 = jax.random.split(rng)
-        joints = joints + jax.random.uniform(k6, (29,), minval=-0.08, maxval=0.08)
+        noise = jax.random.uniform(k6, (29,), minval=-0.08, maxval=0.08)
+        joints = joints + noise * jp.where(bridge, 0.3, 1.0)
 
         qpos = jp.concatenate([pos, quat, joints])
         rng, k7 = jax.random.split(rng)
-        qvel = qvel.at[0:2].set(jax.random.uniform(k7, (2,), minval=-0.12, maxval=0.12))
+        qvel = qvel.at[0:2].set(
+            jax.random.uniform(k7, (2,), minval=-0.12, maxval=0.12)
+            * jp.where(bridge, 0.0, 1.0))
 
         # playground/mjx API drift: the config fields were RENAMED (nconmax ->
         # naconmax, Colab 2026-06) and the kwargs differ across versions. Read
@@ -174,7 +243,14 @@ class G1ClimbBox(g1_joystick.Joystick):
         except TypeError:
             mk.pop("nconmax", None)
             mk.pop("njmax", None)
-            data = mjx_env.make_data(self.mj_model, **mk)
+            try:
+                data = mjx_env.make_data(self.mj_model, **mk)
+            except TypeError:
+                # playground/mjx skew where the WRAPPER passes renamed kwargs
+                # internally (older playground + newer mjx, e.g. local Mac):
+                # build the data object from mjx directly.
+                data = mjx.make_data(self.mjx_model).replace(
+                    qpos=qpos, qvel=qvel, ctrl=qpos[7:])
         data = mjx.forward(self.mjx_model, data)
 
         phase = jp.array([0.0, jp.pi])

@@ -63,11 +63,21 @@ def main():
     ap.add_argument("--fps", type=int, default=20)
     args = ap.parse_args()
 
-    m = g1_sit_env.build_fbx_chair_model(SIM_DT)     # FULL chair: 153 hulls + leg pairs
+    # FULL chair: 153 hulls + leg pairs + hand pairs (the policy may hand-brace)
+    m = g1_sit_env.build_fbx_chair_model(SIM_DT, pair_hands=True)
     for a in range(12):
         m.actuator_gainprm[a, 0] = SIT_KP
         m.actuator_biasprm[a, 1] = -SIT_KP
         m.actuator_biasprm[a, 2] = -SIT_KD
+    # arm mode gains — must match g1_climb_mjx_env (stock kp=2 wrists flop)
+    for a in (15, 16, 17, 18, 22, 23, 24, 25):
+        m.actuator_gainprm[a, 0] = 150.0
+        m.actuator_biasprm[a, 1] = -150.0
+        m.actuator_biasprm[a, 2] = -4.0
+    for a in (19, 20, 21, 26, 27, 28):
+        m.actuator_gainprm[a, 0] = 80.0
+        m.actuator_biasprm[a, 1] = -80.0
+        m.actuator_biasprm[a, 2] = -2.0
     m.vis.global_.offwidth, m.vis.global_.offheight = 1280, 720
     d = mujoco.MjData(m)
     kid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, "knees_bent")

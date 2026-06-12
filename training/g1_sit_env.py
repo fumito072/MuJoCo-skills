@@ -236,11 +236,21 @@ def add_fbx_chair_geoms(spec, center_xy=(0.0, 0.0), yaw=0.0, pair_legs=True):
     return names
 
 
-def build_fbx_chair_model(sim_dt=0.002, center_xy=(0.0, 0.0), yaw=0.0, pair_legs=True):
-    """Plain-MuJoCo G1 feetonly model WITH the real FBX chair + leg collision pairs."""
+def build_fbx_chair_model(sim_dt=0.002, center_xy=(0.0, 0.0), yaw=0.0, pair_legs=True,
+                          pair_hands=False):
+    """Plain-MuJoCo G1 feetonly model WITH the real FBX chair + leg collision pairs.
+
+    pair_hands=True also collides left/right_hand_collision with every chair
+    hull — needed for hand-braced behaviors (g1_handbrace_probe.py and the
+    hand-brace climb policies trained by g1_climb_mjx_env.py).
+    """
     assets = g1_base.get_assets()
     spec = mujoco.MjSpec.from_string(consts.FEET_ONLY_FLAT_TERRAIN_XML.read_text(), assets)
-    add_fbx_chair_geoms(spec, center_xy=center_xy, yaw=yaw, pair_legs=pair_legs)
+    names = add_fbx_chair_geoms(spec, center_xy=center_xy, yaw=yaw, pair_legs=pair_legs)
+    if pair_hands:
+        for hg in ("left_hand_collision", "right_hand_collision"):
+            for cg in names:
+                spec.add_pair(geomname1=hg, geomname2=cg)
     spec.assets = assets
     m = spec.compile()
     m.opt.timestep = sim_dt
