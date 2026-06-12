@@ -179,10 +179,11 @@ class G1ClimbBox(g1_joystick.Joystick):
         qpos = self._init_q
         qvel = jp.zeros(self.mjx_model.nv)
 
-        rng, k_mode, k1, k2, k3, k4, k5 = jax.random.split(rng, 7)
+        rng, k_mode, k1, k2, k3, k4, k5, kd1, kd2 = jax.random.split(rng, 9)
         u = jax.random.uniform(k_mode)
         bridge = u < 0.25                     # mode C: measured 4-point bridge (RSI)
-        on_platform = (u >= 0.25) & (u < 0.55)
+        oneleg = (u >= 0.25) & (u < 0.40)     # mode D: single-support curriculum
+        on_platform = (u >= 0.40) & (u < 0.65)
 
         # mode A: floor, facing the step (-y), forward approach
         yaw_a = -jp.pi / 2 + jax.random.uniform(k1, (), minval=-0.10, maxval=0.10)
@@ -211,6 +212,39 @@ class G1ClimbBox(g1_joystick.Joystick):
             leg_crouch = leg_crouch.at[ap].add(-crouch * 0.6)
         joints = joints + jp.where(on_platform, leg_crouch, jp.zeros(29))
 
+        # mode D: one-leg stance at the step edge — the human curriculum
+        # ("shift weight onto one leg, raise the other to ~90 deg, balance").
+        # 10 scripted probes (2026-06-13) showed this state is REACHABLE but
+        # knife-edge open-loop: the lateral CoM transfer is an avalanche
+        # (closed-chain leg push, ~8 cm/s at center crossing) that hand-tuned
+        # PD can't time. Spawning IN the state lets PPO learn single-support
+        # balance exactly where the climb needs it — the raised foot is one
+        # small motion from the platform. lift_amt grades the curriculum
+        # (50-100% of the 90-deg tuck). Yaw/quat from mode A already apply.
+        stance_left = jax.random.bernoulli(kd1)
+        lift_amt = jax.random.uniform(kd2, (), minval=0.5, maxval=1.0)
+        pos_d = jp.array([0.0, 0.65, qpos[2] - 0.005])
+        pos_d = pos_d.at[0].add(jp.where(stance_left, 0.07, -0.07))   # CoM over stance foot
+        pos_d = pos_d.at[0].add(jax.random.uniform(k2, (), minval=-0.02, maxval=0.02))
+        pos_d = pos_d.at[1].add(jax.random.uniform(k3, (), minval=-0.03, maxval=0.03))
+        swing_pose = jp.array([-1.6, 1.6, -0.2]) * lift_amt   # hip pitch, knee, ankle
+        sw_r = (jp.zeros(29).at[6].set(swing_pose[0])
+                .at[9].set(swing_pose[1]).at[10].set(swing_pose[2]))
+        sw_l = (jp.zeros(29).at[0].set(swing_pose[0])
+                .at[3].set(swing_pose[1]).at[4].set(swing_pose[2]))
+        mask_r = jp.zeros(29).at[6].set(1.0).at[9].set(1.0).at[10].set(1.0)
+        mask_l = jp.zeros(29).at[0].set(1.0).at[3].set(1.0).at[4].set(1.0)
+        swing = jp.where(stance_left, sw_r, sw_l)
+        mask = jp.where(stance_left, mask_r, mask_l)
+        # stance hip roll leans the pelvis over the stance foot (sign measured:
+        # negative = lean left; mirrored positive for the right stance)
+        hiproll = jp.where(stance_left,
+                           jp.zeros(29).at[1].set(-0.12),
+                           jp.zeros(29).at[7].set(0.12))
+        joints_d = joints * (1 - mask) + swing + hiproll
+        pos = jp.where(oneleg, pos_d, pos)
+        joints = jp.where(oneleg, joints_d, joints)
+
         # mode C overrides: the probe's quasi-static brace, tighter noise so
         # the pressed hands stay in contact
         pos = jp.where(bridge, BRIDGE_QPOS[0:3], pos)
@@ -224,7 +258,7 @@ class G1ClimbBox(g1_joystick.Joystick):
         rng, k7 = jax.random.split(rng)
         qvel = qvel.at[0:2].set(
             jax.random.uniform(k7, (2,), minval=-0.12, maxval=0.12)
-            * jp.where(bridge, 0.0, 1.0))
+            * jp.where(bridge | oneleg, 0.0, 1.0))
 
         # playground/mjx API drift: the config fields were RENAMED (nconmax ->
         # naconmax, Colab 2026-06) and the kwargs differ across versions. Read
