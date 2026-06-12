@@ -57,14 +57,22 @@ def main():
     ap.add_argument("--steps", type=int, default=6_000_000)
     ap.add_argument("--envs", type=int, default=10)
     ap.add_argument("--resume", type=str, default=None)
+    ap.add_argument("--lr-end", type=float, default=None,
+                    help="linearly anneal LR from --lr-start to this over the run "
+                         "(constant 3e-4 destroyed the policy over the 1e8 run)")
+    ap.add_argument("--lr-start", type=float, default=3e-4)
     args = ap.parse_args()
 
     os.makedirs(RUNS, exist_ok=True)
     venv = SubprocVecEnv([make_env(i) for i in range(args.envs)])
     if args.resume:
         venv = VecNormalize.load(args.resume + "_vecnorm.pkl", venv)
-        model = PPO.load(args.resume, env=venv)
-        print(f"resumed from {args.resume}")
+        custom = {}
+        if args.lr_end is not None:
+            lo, hi_ = args.lr_end, args.lr_start
+            custom["learning_rate"] = lambda progress: lo + (hi_ - lo) * progress
+        model = PPO.load(args.resume, env=venv, custom_objects=custom)
+        print(f"resumed from {args.resume} lr_end={args.lr_end}")
     else:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
         model = PPO(

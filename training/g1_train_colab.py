@@ -22,7 +22,7 @@ import jax
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--task", choices=["walk", "sit"], default="walk")
+    ap.add_argument("--task", choices=["walk", "sit", "climb"], default="walk")
     ap.add_argument("--steps", type=int, default=20_000_000)
     ap.add_argument("--out", default="g1_policy")
     ap.add_argument("--seed", type=int, default=0)
@@ -36,6 +36,9 @@ def main():
     if args.task == "sit":
         import g1_sit_env  # noqa: F401  (importing registers "G1Sit")
         env_name = "G1Sit"
+    elif args.task == "climb":
+        import g1_climb_mjx_env  # noqa: F401  (registers "G1ClimbBox")
+        env_name = "G1ClimbBox"
     else:
         env_name = "G1JoystickFlatTerrain"
 
