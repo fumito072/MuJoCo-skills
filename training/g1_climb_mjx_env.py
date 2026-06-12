@@ -53,7 +53,10 @@ def climb_config():
     cfg = g1_joystick.default_config()
     cfg.impl = "jax"
     cfg.episode_length = 400                  # 8 s
-    cfg.njmax = 29 * 2 + 16 * 4
+    try:
+        cfg.njmax = 29 * 2 + 16 * 4
+    except (AttributeError, KeyError):        # field renamed in newer playground
+        pass
     rc = cfg.reward_config
     s = rc.scales
     for k in ("tracking_lin_vel", "tracking_ang_vel", "feet_phase", "feet_air_time",
@@ -154,17 +157,24 @@ class G1ClimbBox(g1_joystick.Joystick):
         rng, k7 = jax.random.split(rng)
         qvel = qvel.at[0:2].set(jax.random.uniform(k7, (2,), minval=-0.12, maxval=0.12))
 
-        try:        # playground/mjx API drift: nconmax/njmax kwargs exist only in
-            data = mjx_env.make_data(   # some version combos (seen locally + on Colab)
-                self.mj_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:],
-                impl=self.mjx_model.impl.value,
-                nconmax=self._config.nconmax, njmax=self._config.njmax,
-            )
+        # playground/mjx API drift: the config fields were RENAMED (nconmax ->
+        # naconmax, Colab 2026-06) and the kwargs differ across versions. Read
+        # whichever exists; fall back to letting make_data size the arenas.
+        mk = dict(qpos=qpos, qvel=qvel, ctrl=qpos[7:], impl=self.mjx_model.impl.value)
+        for kw, names in (("nconmax", ("nconmax", "naconmax")),
+                          ("njmax", ("njmax", "najmax"))):
+            for n in names:
+                try:
+                    mk[kw] = self._config[n]
+                    break
+                except KeyError:
+                    continue
+        try:
+            data = mjx_env.make_data(self.mj_model, **mk)
         except TypeError:
-            data = mjx_env.make_data(
-                self.mj_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:],
-                impl=self.mjx_model.impl.value,
-            )
+            mk.pop("nconmax", None)
+            mk.pop("njmax", None)
+            data = mjx_env.make_data(self.mj_model, **mk)
         data = mjx.forward(self.mjx_model, data)
 
         phase = jp.array([0.0, jp.pi])
