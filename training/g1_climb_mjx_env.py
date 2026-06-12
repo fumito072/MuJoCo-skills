@@ -154,11 +154,17 @@ class G1ClimbBox(g1_joystick.Joystick):
         rng, k7 = jax.random.split(rng)
         qvel = qvel.at[0:2].set(jax.random.uniform(k7, (2,), minval=-0.12, maxval=0.12))
 
-        data = mjx_env.make_data(
-            self.mj_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:],
-            impl=self.mjx_model.impl.value,
-            nconmax=self._config.nconmax, njmax=self._config.njmax,
-        )
+        try:        # playground/mjx API drift: nconmax/njmax kwargs exist only in
+            data = mjx_env.make_data(   # some version combos (seen locally + on Colab)
+                self.mj_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:],
+                impl=self.mjx_model.impl.value,
+                nconmax=self._config.nconmax, njmax=self._config.njmax,
+            )
+        except TypeError:
+            data = mjx_env.make_data(
+                self.mj_model, qpos=qpos, qvel=qvel, ctrl=qpos[7:],
+                impl=self.mjx_model.impl.value,
+            )
         data = mjx.forward(self.mjx_model, data)
 
         phase = jp.array([0.0, jp.pi])

@@ -64,12 +64,21 @@ def main():
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     latest_path, best_path = out + "_latest_params.pkl", out + "_best_params.pkl"
     best = {"r": float("-inf")}
+    metrics_path = out + "_metrics.jsonl"
+
+    # smoke test BEFORE the long train: surface env bugs in seconds, not minutes
+    print("smoke test: env.reset() ...", flush=True)
+    st = env.reset(jax.random.PRNGKey(0))
+    print("smoke test OK (reward:", float(st.reward), ")", flush=True)
 
     # brax calls these per eval in this order: policy_params_fn -> run_evaluation -> progress_fn.
     # So at progress() time, latest_params.pkl already holds THIS eval's params -> promote if best.
     def save_ckpt(step, make_policy, params):     # brax passes (current_step, make_policy, params)
-        del step, make_policy
+        del make_policy
         with open(latest_path, "wb") as f:
+            pickle.dump(params, f)
+        # numbered checkpoint every eval — per-batch history for later analysis
+        with open(out + f"_ckpt_{int(step):010d}.pkl", "wb") as f:
             pickle.dump(params, f)
 
     def progress(step, metrics):
@@ -81,6 +90,11 @@ def main():
                 shutil.copyfile(latest_path, best_path)
                 tag = "  <- new best (saved)"
         print(f"  step {step:>12,}  eval_reward={r:8.2f}{tag}", flush=True)
+        with open(metrics_path, "a") as f:
+            f.write(json.dumps({"step": int(step),
+                                **{k: float(v) for k, v in metrics.items()
+                                   if isinstance(v, (int, float)) or hasattr(v, "item")}})
+                    + "\n")
 
     print("training... (checkpoints: *_latest / *_best every eval; survives early stop & disconnect)")
     _, params, _ = ppo.train(
