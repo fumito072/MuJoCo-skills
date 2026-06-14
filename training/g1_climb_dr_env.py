@@ -227,6 +227,10 @@ class G1ClimbDREnv(gym.Env):
             r -= self.stand_act_pen * float(np.sum(a ** 2))   # anchor to default (upright) pose
         r -= 0.02                                             # small time cost (finish/settle)
         r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
+        # ANTI-BOUNCE: the policy springs UP onto its toes (base_z overshoots target,
+        # feet leave the step top) in a vertical limit cycle. Penalize rising above
+        # the target stand height so it settles flat on both feet instead of bouncing.
+        r -= 4.0 * max(0.0, d.qpos[2] - (self.target_z + 0.03))
         self._last_a = a
 
         # clean platform stand: both feet up, tall, UPRIGHT, on-step, calm
