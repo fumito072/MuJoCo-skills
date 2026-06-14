@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
@@ -92,6 +92,7 @@ def main():
     ap.add_argument("--cap_thresh", type=float, default=0.4)
     ap.add_argument("--cap_min_n", type=int, default=80)
     ap.add_argument("--name", type=str, default="climb_dr")
+    ap.add_argument("--algo", choices=["ppo", "sac"], default="ppo")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--target_kl", type=float, default=None,
                     help="cap PPO update KL to prevent the divergence (peak-then-collapse)")
@@ -100,22 +101,34 @@ def main():
     os.makedirs(RUNS, exist_ok=True)
     name = args.name
     venv = SubprocVecEnv([make_env(i) for i in range(args.envs)])
+    cls = PPO if args.algo == "ppo" else SAC
+    # off-policy (SAC) + reward-normalization interact badly (buffer holds stale norms)
+    norm_rew = (args.algo == "ppo")
     if args.resume:
         venv = VecNormalize.load(args.resume + "_vecnorm.pkl", venv)
         venv.training = True
-        venv.norm_reward = True
-        model = PPO.load(args.resume, env=venv, device=args.device)
-        model.ent_coef = args.ent_coef
-        if args.target_kl is not None:
-            model.target_kl = args.target_kl
+        venv.norm_reward = norm_rew
+        model = cls.load(args.resume, env=venv, device=args.device)
+        if args.algo == "ppo":
+            model.ent_coef = args.ent_coef
+            if args.target_kl is not None:
+                model.target_kl = args.target_kl
         model.learning_rate = args.lr
-        print(f"resumed from {args.resume}", flush=True)
-    else:
+        print(f"resumed {args.algo} from {args.resume}", flush=True)
+    elif args.algo == "ppo":
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
         model = PPO("MlpPolicy", venv, verbose=1, device=args.device,
                     n_steps=512, batch_size=4096, learning_rate=args.lr,
                     gamma=0.99, gae_lambda=0.95, ent_coef=args.ent_coef, clip_range=0.2,
                     target_kl=args.target_kl,
+                    policy_kwargs=dict(net_arch=[256, 256]))
+    else:  # SAC — off-policy, replay buffer in (unified) RAM, far more stable for
+           # continuous "reach and hold" than PPO (which diverged on the trivial stand)
+        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
+        model = SAC("MlpPolicy", venv, verbose=1, device=args.device,
+                    buffer_size=400_000, batch_size=512, learning_rate=args.lr,
+                    train_freq=1, gradient_steps=1, learning_starts=5_000,
+                    ent_coef="auto", gamma=0.99,
                     policy_kwargs=dict(net_arch=[256, 256]))
 
     ckpt = CheckpointCallback(save_freq=max(1_000_000 // args.envs, 1),

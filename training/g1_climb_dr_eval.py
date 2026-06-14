@@ -12,10 +12,17 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from g1_climb_dr_env import G1ClimbDREnv
+
+
+def load_model(stem):
+    try:
+        return PPO.load(stem, device="cpu")
+    except Exception:
+        return SAC.load(stem, device="cpu")
 
 
 def main():
@@ -29,7 +36,7 @@ def main():
                              DummyVecEnv([lambda: G1ClimbDREnv(fixed_h=0.1)]))
     venv.training = False
     venv.norm_reward = False
-    m = PPO.load(args.model, device="cpu")
+    m = load_model(args.model)
     heights = [float(x) for x in args.heights.split(",")]
     out = {}
     for H in heights:
