@@ -66,7 +66,12 @@ class G1ClimbDREnv(gym.Env):
         # term in the stand-quality goes flat (~0) at a big lean -> no gradient to
         # escape; this keeps pushing pitch/roll down from any lean. Configurable for
         # the reward sweep (G1CLIMB_UPRIGHT_PEN).
-        self.upright_pen = float(os.environ.get("G1CLIMB_UPRIGHT_PEN", 2.0))
+        self.upright_pen = float(os.environ.get("G1CLIMB_UPRIGHT_PEN", 4.0))
+        # penalize commanding deviations from the default pose WHILE standing on the
+        # step: the default pose stands upright (zero-action holds pitch<15), so the
+        # ~20-28deg lean comes from the policy actively deviating. This anchors it to
+        # the upright default once up (gated to feet==2 so the CLIMB can still act).
+        self.stand_act_pen = float(os.environ.get("G1CLIMB_STAND_ACT_PEN", 0.4))
         # AUTOMATIC CURRICULUM over the randomization RANGE (user's idea): sample
         # height from [H_MIN, h_cap]; h_cap starts low and the trainer grows it as
         # the top of the range is mastered. Always randomizing the WHOLE [H_MIN,
@@ -211,9 +216,10 @@ class G1ClimbDREnv(gym.Env):
             tall = float(np.exp(-8.0 * max(0.0, self.target_z - d.qpos[2])))
             calm = float(np.exp(-1.0 * ang) * np.exp(-2.0 * lin))
             leg_dev = float(np.sum((d.qpos[7:7 + 12] - self.default_pose[:12]) ** 2))
-            pose = float(np.exp(-2.0 * leg_dev))
+            pose = float(np.exp(-4.0 * leg_dev))              # sharper: hold the default (upright) legs
             r += 8.0 * up * tall * calm * pose
             r -= self.upright_pen * grav_err                  # non-vanishing upright gradient
+            r -= self.stand_act_pen * float(np.sum(a ** 2))   # anchor to default (upright) pose
         r -= 0.02                                             # small time cost (finish/settle)
         r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
         self._last_a = a
