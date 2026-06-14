@@ -34,13 +34,16 @@ from mujoco_playground._src.locomotion.g1 import base as g1_base
 CTRL_DT, SUBSTEPS = 0.02, 10
 ACTION_SCALE = 0.5
 EP_SECONDS = 6.0
-LIFT_TARGET = 0.18          # swing-foot world-z that counts as a clean lift
-HOLD_FOR = 1.5             # seconds of continuous one-leg stand = success
-# STATIC stand: the v1 policy balanced as a never-settling limit cycle (CoM on
-# the heel, perpetual yaw rotation). v3 keeps v1's strong one-leg incentive but
-# (a) scales the one-leg bonus by stillness (3.0*exp(-0.8*spin)*exp(-1.5*yaw))
-# so the held pose settles, (b) adds gentle spin/drift penalties, and (c) rewards
-# a FORWARD knee raise so the CoM sits over the foot center, not the heel.
+LIFT_TARGET = 0.30          # shaping: reward foot height up to a real ~90deg knee raise
+HOLD_GATE_Z = 0.22          # held/success gate = clear the ACTUAL 0.22 m step height
+HOLD_FOR = 1.5             # seconds of continuous CLEAN one-leg stand = success
+# CLIMB-READY one-leg stand (v4). User feedback on the v3 GIF: the torso bent
+# forward + an arm flailed + the lift was low — a "don't fall" recovery pose,
+# not the "knee high to ~90deg with a STEADY torso" needed to step onto the
+# 0.22 m platform. v4 demands that: the held gate requires clearing 0.22 m AND
+# an upright (un-bent) torso; the reward strongly raises the knee, holds the
+# waist neutral (kills the forward bend), keeps the arms near neutral (kills the
+# flail), and scales the hold bonus by stillness.
 
 
 def wrap(a):
@@ -161,20 +164,24 @@ class G1OneLegEnv(gym.Env):
         yaw_drift = abs(wrap(yaw - self._yaw0))                            # net rotation
         xy_drift = float(np.linalg.norm(d.qpos[:2] - self._start_xy))      # wandering
         swing_hip_pitch = float(d.qpos[7 + (6 if self._stance_left else 0)])
-        swing_flex = max(0.0, -swing_hip_pitch)               # FORWARD knee raise (90deg look)
+        swing_flex = max(0.0, -swing_hip_pitch)               # FORWARD knee raise toward 90deg
+        waist_dev = d.qpos[7 + 12:7 + 15] - self.default_pose[12:15]   # yaw/roll/pitch
+        waist_pitch = abs(float(d.qpos[7 + 14] - self.default_pose[14]))  # forward bend
+        arm_dev = d.qpos[7 + 15:7 + 29] - self.default_pose[15:29]
 
-        # v1 incentives (these drove one-leg standing to ~87%) — KEPT INTACT so
-        # the one-leg pose stays far more rewarding than a safe two-foot stand
-        # (over-penalizing motion in v2 made two-foot the optimum -> 0% one-leg)
-        r = 1.0 * upright
-        r += 1.5 * min(swing_z, LIFT_TARGET) / LIFT_TARGET    # lift the swing foot
-        r += 0.4 * min(swing_flex, 1.2) / 1.2                 # raise it FORWARD (CoM over foot, not heel)
+        # one-leg incentives (the pose must stay far more rewarding than a safe
+        # two-foot stand — over-penalizing in v2 made two-foot the optimum -> 0%)
+        r = 1.5 * upright                                     # stronger: keep PELVIS upright
+        r += 1.5 * min(swing_z, LIFT_TARGET) / LIFT_TARGET    # lift the foot HIGH (toward 0.30)
+        r += 0.8 * min(swing_flex, 1.5) / 1.5                 # thigh toward horizontal (~90deg)
         r += 0.5 if on[stance_g] else 0.0                     # keep the stance foot down
         r -= 1.5 * over                                       # CoM over the foot CENTER (heel fix)
+        r -= 0.6 * float(np.sum(waist_dev ** 2))             # hold the WAIST neutral (no forward bend)
+        r -= 0.15 * float(np.mean(arm_dev ** 2))             # arms near neutral (no flailing)
         r -= 0.5 * max(0.0, 0.62 - d.qpos[2])                 # don't squat/collapse
         r += 0.1                                              # alive
         r -= 0.3 if on[swing_g] else 0.0                      # swing foot should be UP
-        # GENTLE static shaping (small vs the one-leg bonus below)
+        # gentle static shaping (small vs the one-leg bonus below)
         r -= 0.15 * ang                                       # discourage spin/wobble
         r -= 0.30 * yaw_drift                                 # hold the original heading
         r -= 0.20 * xy_drift                                  # stay on the spot
@@ -182,11 +189,11 @@ class G1OneLegEnv(gym.Env):
         r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
         r -= 0.0003 * float(np.sum(d.qvel[6:] ** 2))
 
-        # one-leg hold (achievable v1 gate) -> bonus MAXIMIZED when still & not
-        # rotating, so the held pose settles to a static stand instead of spinning
-        clean = (swing_z > LIFT_TARGET * 0.9 and not on[swing_g]
-                 and abs(roll) < 18 and abs(pitch) < 18)
-        r += (3.0 * np.exp(-0.8 * ang) * np.exp(-1.5 * yaw_drift)) if clean else 0.0
+        # CLEAN climb-ready hold: foot clears the real step height, torso upright
+        # AND un-bent. Bonus maximized when still & not rotating -> a steady stand.
+        clean = (swing_z > HOLD_GATE_Z and not on[swing_g]
+                 and abs(roll) < 15 and abs(pitch) < 15 and waist_pitch < 0.30)
+        r += (3.0 * np.exp(-1.0 * ang) * np.exp(-1.5 * yaw_drift)) if clean else 0.0
         self._held = self._held + CTRL_DT if clean else 0.0
         if self._held >= HOLD_FOR:
             self._ever_success = True

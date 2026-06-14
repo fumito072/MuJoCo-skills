@@ -57,7 +57,8 @@ def main():
         frames = []
         max_held = 0.0
         ever = False
-        ang_while_clean = []
+        ang_while_clean, z_while, waist_while = [], [], []
+        swing_g0 = env.rf if env._stance_left else env.lf
         for k in range(int(6.0 / CTRL_DT)):
             o = vecnorm.normalize_obs(obs) if vecnorm is not None else obs
             act, _ = model.predict(o, deterministic=True)
@@ -67,6 +68,8 @@ def main():
             if info["held"] > 0:                              # currently in a clean hold
                 ang_while_clean.append(
                     float(np.linalg.norm(d.sensor("gyro_pelvis").data)))
+                z_while.append(float(d.geom_xpos[swing_g0][2]))
+                waist_while.append(abs(float(d.qpos[7 + 14] - env.default_pose[14])))
             if rend is not None:
                 rend.update_scene(d, camera=cam)
                 from PIL import Image
@@ -77,11 +80,14 @@ def main():
         holds.append(max_held)
         succ += int(ever)
         mean_ang = float(np.mean(ang_while_clean)) if ang_while_clean else float("nan")
+        mean_z = float(np.mean(z_while)) if z_while else float("nan")
+        mean_waist = float(np.degrees(np.mean(waist_while))) if waist_while else float("nan")
         if ang_while_clean:
             angs.append(mean_ang)
         side = "L" if env._stance_left else "R"
-        print(f"ep{ep:2d} stance={side}  max_hold={max_held:4.2f}s  "
-              f"spin(while held)={mean_ang:4.2f}rad/s  {'SUCCESS' if ever else ''}")
+        print(f"ep{ep:2d} stance={side}  hold={max_held:4.2f}s  "
+              f"lift={mean_z:4.2f}m  torso_bend={mean_waist:4.1f}deg  "
+              f"spin={mean_ang:4.2f}rad/s  {'SUCCESS' if ever else ''}")
         if args.video and max_held > best_hold:
             best_hold, best_frames = max_held, frames
 
