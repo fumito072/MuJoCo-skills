@@ -210,7 +210,12 @@ class G1ClimbDREnv(gym.Env):
         # The policy was leaning forward (pitch>15) because uprightness was never in
         # the reward; folding it into the product makes leaning strictly worse, so
         # the milkable optimum the policy converges to IS the success pose.
+        # ANTI-MARCH: reward both feet planted on the step (a simple gradient the
+        # strict conjunctive bonus below can't give). The policy stands UPRIGHT but
+        # marches in place — lifting feet alternately — so feet==2 is never sustained;
+        # this makes a still two-foot plant strictly better than the limit cycle.
         if feet == 2:
+            r += 1.5
             grav_err = float(np.sum((grav - np.array([0, 0, -1.0])) ** 2))
             up = float(np.exp(-12.0 * grav_err))
             tall = float(np.exp(-8.0 * max(0.0, self.target_z - d.qpos[2])))
