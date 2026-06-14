@@ -270,14 +270,15 @@ class G1ClimbCurriculumEnv(gym.Env):
             r -= 0.2 if on_support[swing_g] else 0.0          # mild: don't park on the floor
         if feet_on_step == 2:
             r += 1.0                                          # BOTH feet on the platform
-            # STAND TALL on the step: sharp gradient so the policy rises out of the
-            # crouch (the linear rise reward saturated at the crouch -> no gradient).
-            r += 3.0 * np.exp(-8.0 * max(0.0, self.target_z - d.qpos[2]))
-            # the LEGS were unconstrained, so crouching (knees bent past default) was
-            # "free" and the policy parked at base_z~0.74. Reward returning the legs
-            # to the default pose = the stable TALL stand (zero-action holds it).
+            # ONE BIG on-step reward that REQUIRES calm * tall * default-pose, so a
+            # clean STILL stand strictly beats "both feet but fidgeting/crouched"
+            # (the milking attractor that collapsed success as training converged:
+            # the old rewards were collected regardless of calm). calm->0 when
+            # moving so milking pays little; the convergent optimum IS the success.
+            calm = float(np.exp(-1.0 * ang) * np.exp(-2.0 * lin))
+            tall = float(np.exp(-8.0 * max(0.0, self.target_z - d.qpos[2])))
             leg_dev = float(np.sum((d.qpos[7:7 + 12] - self.default_pose[:12]) ** 2))
-            r += 3.0 * np.exp(-2.0 * leg_dev)
+            r += 9.0 * calm * tall * np.exp(-2.0 * leg_dev)
 
         # keep the v4 steady-torso shaping (no forward bend, no arm flail)
         r -= 0.6 * float(np.sum(waist_dev ** 2))
@@ -303,7 +304,9 @@ class G1ClimbCurriculumEnv(gym.Env):
                    and abs(roll) < 20 and abs(pitch) < 20
                    and d.qpos[0] > STEP_FRONT_X + 0.05 and abs(d.qpos[1]) < 0.25
                    and ang < 3.0 and lin < 0.6)
-        r += (3.0 * np.exp(-1.0 * ang)) if climbed else 0.0
+        # small extra reinforcement in the success window (the calm*tall term above
+        # is the main driver; the climbed gate also advances the success flag)
+        r += 2.0 if climbed else 0.0
         self._held = self._held + CTRL_DT if climbed else 0.0
         if self._held >= HOLD_FOR:
             self._ever_success = True
@@ -311,11 +314,13 @@ class G1ClimbCurriculumEnv(gym.Env):
         terminated, truncated = False, False
         info = {"success": self._ever_success, "held": self._held,
                 "feet_on_step": feet_on_step, "rsi": int(self._from_rsi)}
+        # do NOT terminate on success: terminating forfeited ~250 frames of dense
+        # reward for a +200 bonus, so the policy learned to AVOID a clean 5-frame
+        # hold (hover just off-clean to keep milking). Now success is only a flag;
+        # the episode runs full length and the dominant clean-stand reward above is
+        # what the policy milks -> it settles into the success state on its own.
         if d.qpos[2] < 0.45 or abs(roll) > 50 or abs(pitch) > 50:
             r -= 20.0
-            terminated = True
-        elif self._held >= HOLD_FOR:
-            r += 200.0
             terminated = True
         elif self._steps >= int(EP_SECONDS / CTRL_DT):
             truncated = True
