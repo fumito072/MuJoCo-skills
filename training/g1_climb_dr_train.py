@@ -91,10 +91,11 @@ def main():
     ap.add_argument("--cap_band", type=float, default=0.03)
     ap.add_argument("--cap_thresh", type=float, default=0.4)
     ap.add_argument("--cap_min_n", type=int, default=80)
+    ap.add_argument("--name", type=str, default="climb_dr")
     args = ap.parse_args()
 
     os.makedirs(RUNS, exist_ok=True)
-    name = "climb_dr"
+    name = args.name
     venv = SubprocVecEnv([make_env(i) for i in range(args.envs)])
     if args.resume:
         venv = VecNormalize.load(args.resume + "_vecnorm.pkl", venv)

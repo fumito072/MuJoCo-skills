@@ -61,6 +61,12 @@ class G1ClimbDREnv(gym.Env):
         obs_dim = 3 + 3 + 3 + 1 + self.nu + self.nu + 2 + 1 + self.nu + 3  # 103
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
         self.rsi_p = float(os.environ.get("G1CLIMB_RSI_P", 0.4))
+        # standalone UPRIGHT penalty with a NON-vanishing gradient (linear in the
+        # squared gravity error), active when standing on the step. The exp() upright
+        # term in the stand-quality goes flat (~0) at a big lean -> no gradient to
+        # escape; this keeps pushing pitch/roll down from any lean. Configurable for
+        # the reward sweep (G1CLIMB_UPRIGHT_PEN).
+        self.upright_pen = float(os.environ.get("G1CLIMB_UPRIGHT_PEN", 2.0))
         # AUTOMATIC CURRICULUM over the randomization RANGE (user's idea): sample
         # height from [H_MIN, h_cap]; h_cap starts low and the trainer grows it as
         # the top of the range is mastered. Always randomizing the WHOLE [H_MIN,
@@ -200,12 +206,14 @@ class G1ClimbDREnv(gym.Env):
         # the reward; folding it into the product makes leaning strictly worse, so
         # the milkable optimum the policy converges to IS the success pose.
         if feet == 2:
-            up = float(np.exp(-12.0 * np.sum((grav - np.array([0, 0, -1.0])) ** 2)))
+            grav_err = float(np.sum((grav - np.array([0, 0, -1.0])) ** 2))
+            up = float(np.exp(-12.0 * grav_err))
             tall = float(np.exp(-8.0 * max(0.0, self.target_z - d.qpos[2])))
             calm = float(np.exp(-1.0 * ang) * np.exp(-2.0 * lin))
             leg_dev = float(np.sum((d.qpos[7:7 + 12] - self.default_pose[:12]) ** 2))
             pose = float(np.exp(-2.0 * leg_dev))
             r += 8.0 * up * tall * calm * pose
+            r -= self.upright_pen * grav_err                  # non-vanishing upright gradient
         r -= 0.02                                             # small time cost (finish/settle)
         r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
         self._last_a = a
