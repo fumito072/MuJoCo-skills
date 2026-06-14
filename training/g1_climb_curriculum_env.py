@@ -138,6 +138,16 @@ class G1ClimbCurriculumEnv(gym.Env):
                     and self.d.qpos[2] > 0.70 and abs(self.d.qpos[1]) < 0.2):
                 qs.append(self.d.qpos.copy())
                 vs.append(self.d.qvel.copy())
+        # HARVESTED mid-transfer states (g1_climb_harvest_rsi.py): the constructed
+        # states above are only the END (standing on the step); these are real
+        # one-foot-on-step / weight-transfer frames from a climbing policy, so the
+        # missing TRANSITION phase gets dense practice too (the whole point).
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        hp = os.path.join(repo, "runs_climb", f"climb_rsi_harvest_h{self.step_h:.2f}.npz")
+        if os.path.exists(hp) and not os.environ.get("G1CLIMB_NO_HARVEST"):
+            z = np.load(hp)
+            qs.extend(z["qpos"])
+            vs.extend(z["qvel"])
         return qs, vs
 
     # --- helpers -------------------------------------------------------------
