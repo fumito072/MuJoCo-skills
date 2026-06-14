@@ -92,6 +92,9 @@ def main():
     ap.add_argument("--cap_thresh", type=float, default=0.4)
     ap.add_argument("--cap_min_n", type=int, default=80)
     ap.add_argument("--name", type=str, default="climb_dr")
+    ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--target_kl", type=float, default=None,
+                    help="cap PPO update KL to prevent the divergence (peak-then-collapse)")
     args = ap.parse_args()
 
     os.makedirs(RUNS, exist_ok=True)
@@ -103,12 +106,16 @@ def main():
         venv.norm_reward = True
         model = PPO.load(args.resume, env=venv, device=args.device)
         model.ent_coef = args.ent_coef
+        if args.target_kl is not None:
+            model.target_kl = args.target_kl
+        model.learning_rate = args.lr
         print(f"resumed from {args.resume}", flush=True)
     else:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
         model = PPO("MlpPolicy", venv, verbose=1, device=args.device,
-                    n_steps=512, batch_size=4096, learning_rate=3e-4,
+                    n_steps=512, batch_size=4096, learning_rate=args.lr,
                     gamma=0.99, gae_lambda=0.95, ent_coef=args.ent_coef, clip_range=0.2,
+                    target_kl=args.target_kl,
                     policy_kwargs=dict(net_arch=[256, 256]))
 
     ckpt = CheckpointCallback(save_freq=max(1_000_000 // args.envs, 1),
