@@ -93,6 +93,9 @@ def main():
     ap.add_argument("--cap_min_n", type=int, default=80)
     ap.add_argument("--name", type=str, default="climb_dr")
     ap.add_argument("--algo", choices=["ppo", "sac"], default="ppo")
+    ap.add_argument("--sac_ent", type=str, default="auto",
+                    help="SAC entropy coef: 'auto' or a float. auto targets high entropy "
+                         "(=random actions) which prevents settling to a still hold; lower it.")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--target_kl", type=float, default=None,
                     help="cap PPO update KL to prevent the divergence (peak-then-collapse)")
@@ -125,10 +128,11 @@ def main():
     else:  # SAC — off-policy, replay buffer in (unified) RAM, far more stable for
            # continuous "reach and hold" than PPO (which diverged on the trivial stand)
         venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
+        sac_ent = args.sac_ent if args.sac_ent == "auto" else float(args.sac_ent)
         model = SAC("MlpPolicy", venv, verbose=1, device=args.device,
                     buffer_size=400_000, batch_size=512, learning_rate=args.lr,
                     train_freq=1, gradient_steps=1, learning_starts=5_000,
-                    ent_coef="auto", gamma=0.99,
+                    ent_coef=sac_ent, gamma=0.99,
                     policy_kwargs=dict(net_arch=[256, 256]))
 
     ckpt = CheckpointCallback(save_freq=max(1_000_000 // args.envs, 1),
