@@ -32,7 +32,9 @@ from g1_climb_curriculum_env import (
 
 H_MIN, H_MAX = 0.02, 0.22
 EP_SECONDS = 6.0
-HOLD_FOR = 0.1               # brief calm arrival = success (FSM then holds the stand)
+HOLD_FOR = 0.04              # BRIEF arrival = success; the stiff gains / mission FSM
+#                              hold the stand, so RL only has to climb up and arrive
+#                              (no long still-hold needed — that was unlearnable)
 
 
 class G1ClimbDREnv(gym.Env):
@@ -227,17 +229,20 @@ class G1ClimbDREnv(gym.Env):
             r -= self.stand_act_pen * float(np.sum(a ** 2))   # anchor to default (upright) pose
         r -= 0.02                                             # small time cost (finish/settle)
         r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
-        # ANTI-BOUNCE: the policy springs UP onto its toes (base_z overshoots target,
-        # feet leave the step top) in a vertical limit cycle. Penalize rising above
-        # the target stand height so it settles flat on both feet instead of bouncing.
-        r -= 4.0 * max(0.0, d.qpos[2] - (self.target_z + 0.03))
+        # STAY ON THE PLATFORM: the policy kept ESCAPING the still-stand by walking
+        # OFF the step (base_y drifted ~1 m). RL only needs to climb up and arrive on
+        # the platform (the stiff gains / mission FSM hold the stand); anchor it so it
+        # can't wander off in y or off the step footprint in x.
+        r -= 2.0 * abs(d.qpos[1])
+        r -= 2.0 * max(0.0, STEP_FRONT_X - 0.02 - d.qpos[0])
+        r -= 2.0 * max(0.0, d.qpos[0] - (STEP_FRONT_X + STEP_DEPTH - 0.05))
         self._last_a = a
 
         # clean platform stand: both feet up, tall, UPRIGHT, on-step, calm
         climbed = (feet == 2 and d.qpos[2] > self.target_z - 0.06
-                   and abs(roll) < 15 and abs(pitch) < 15
-                   and d.qpos[0] > STEP_FRONT_X + 0.05 and abs(d.qpos[1]) < 0.25
-                   and ang < 2.5 and lin < 0.5)
+                   and abs(roll) < 20 and abs(pitch) < 20
+                   and d.qpos[0] > STEP_FRONT_X + 0.05 and abs(d.qpos[1]) < 0.20
+                   and ang < 4.0 and lin < 1.0)
         self._held = self._held + CTRL_DT if climbed else 0.0
         if self._held >= HOLD_FOR:
             self._ever_success = True
