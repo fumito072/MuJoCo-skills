@@ -50,19 +50,23 @@ def main():
         cam.trackbodyid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
         cam.distance, cam.azimuth, cam.elevation = 2.4, 130, -10
 
-    holds, succ = [], 0
+    holds, succ, angs = [], 0, []
     best_frames, best_hold = None, -1.0
     for ep in range(args.episodes):
         obs, _ = env.reset()
         frames = []
         max_held = 0.0
         ever = False
+        ang_while_clean = []
         for k in range(int(6.0 / CTRL_DT)):
             o = vecnorm.normalize_obs(obs) if vecnorm is not None else obs
             act, _ = model.predict(o, deterministic=True)
             obs, r, term, trunc, info = env.step(act)
             max_held = max(max_held, info["held"])
             ever = ever or info["success"]
+            if info["held"] > 0:                              # currently in a clean hold
+                ang_while_clean.append(
+                    float(np.linalg.norm(d.sensor("gyro_pelvis").data)))
             if rend is not None:
                 rend.update_scene(d, camera=cam)
                 from PIL import Image
@@ -72,14 +76,19 @@ def main():
                 break
         holds.append(max_held)
         succ += int(ever)
+        mean_ang = float(np.mean(ang_while_clean)) if ang_while_clean else float("nan")
+        if ang_while_clean:
+            angs.append(mean_ang)
         side = "L" if env._stance_left else "R"
         print(f"ep{ep:2d} stance={side}  max_hold={max_held:4.2f}s  "
-              f"{'SUCCESS' if ever else ''}")
+              f"spin(while held)={mean_ang:4.2f}rad/s  {'SUCCESS' if ever else ''}")
         if args.video and max_held > best_hold:
             best_hold, best_frames = max_held, frames
 
-    print(f"\none-leg success (>=1.5 s hold): {succ}/{args.episodes}  "
-          f"| median max-hold {np.median(holds):.2f}s  best {max(holds):.2f}s")
+    spin = float(np.mean(angs)) if angs else float("nan")
+    print(f"\none-leg success (>=1.5 s STILL hold): {succ}/{args.episodes}  "
+          f"| median max-hold {np.median(holds):.2f}s  best {max(holds):.2f}s"
+          f"  | mean spin while held {spin:.2f} rad/s (lower = more static)")
     if args.video and best_frames:
         os.makedirs(os.path.dirname(args.video), exist_ok=True)
         step = max(1, int(1 / (args.fps * CTRL_DT)))
