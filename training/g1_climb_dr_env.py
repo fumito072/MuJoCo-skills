@@ -61,6 +61,13 @@ class G1ClimbDREnv(gym.Env):
         obs_dim = 3 + 3 + 3 + 1 + self.nu + self.nu + 2 + 1 + self.nu + 3  # 103
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_dim,), np.float32)
         self.rsi_p = float(os.environ.get("G1CLIMB_RSI_P", 0.4))
+        # AUTOMATIC CURRICULUM over the randomization RANGE (user's idea): sample
+        # height from [H_MIN, h_cap]; h_cap starts low and the trainer grows it as
+        # the top of the range is mastered. Always randomizing the WHOLE [H_MIN,
+        # h_cap] keeps every lower height practiced -> no forgetting (the ladder's
+        # flaw); growing the cap only when the top works gives difficulty ordering
+        # (full-range DR lacked it, so tall steps were never discovered).
+        self.h_cap = float(os.environ.get("G1CLIMB_HCAP_START", H_MAX))
         self._last_a = np.zeros(self.nu, np.float32)
         self._steps = 0
         self._held = 0.0
@@ -68,6 +75,13 @@ class G1ClimbDREnv(gym.Env):
         self._from_rsi = False
         self.step_h = H_MAX
         self._set_height(H_MAX)
+
+    def set_h_cap(self, cap):
+        self.h_cap = float(np.clip(cap, H_MIN, H_MAX))
+        return self.h_cap
+
+    def get_h_cap(self):
+        return self.h_cap
 
     def _set_height(self, h):
         self.step_h = float(h)
@@ -100,17 +114,16 @@ class G1ClimbDREnv(gym.Env):
         feet = int(on_step[self.lf]) + int(on_step[self.rf])
         return grav, upright, ang, lin, on_support, on_step, feet
 
-    def _phi(self):
-        """Potential: rises as the robot climbs and stands cleanly. Telescoping
-        r = Phi(s')-Phi(s) means staying in a state earns ~0 -> no milking."""
+    def _phi_climb(self):
+        """Climb-only potential (feet up / base height / forward onto step). Telescoping
+        r = Phi(s')-Phi(s) drives getting UP without being milkable. The STAND quality
+        (upright/calm/pose) is a separate dense term in step()."""
         d = self.d
-        _, upright, ang, lin, _, _, feet = self._state()
+        _, _, _, _, _, _, feet = self._state()
         fs = feet / 2.0
         hz = float(np.clip((d.qpos[2] - 0.6) / (self.target_z - 0.6), 0.0, 1.0))
         ox = float(np.clip(d.qpos[0] / STEP_CENTER_X, 0.0, 1.0))
-        calm = float(np.exp(-1.0 * ang) * np.exp(-2.0 * lin))
-        c_eff = calm if fs >= 1.0 else 0.0                    # calm only counts once UP
-        return 2.0 * fs + 2.0 * hz + 1.0 * ox + 1.0 * upright + 2.0 * c_eff
+        return 3.0 * fs + 2.0 * hz + 1.0 * ox
 
     def _obs(self):
         d = self.d
@@ -130,7 +143,7 @@ class G1ClimbDREnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
-        h = self.fixed_h if self.fixed_h is not None else float(self.rng.uniform(H_MIN, H_MAX))
+        h = self.fixed_h if self.fixed_h is not None else float(self.rng.uniform(H_MIN, self.h_cap))
         self._set_height(h)
         self._stance_left = bool(self.rng.integers(2))
         if self.rng.random() < self.rsi_p:
@@ -158,7 +171,7 @@ class G1ClimbDREnv(gym.Env):
         self._steps = 0
         self._held = 0.0
         self._ever_success = False
-        self._prev_phi = self._phi()
+        self._prev_phi = self._phi_climb()
         return self._obs(), {}
 
     def step(self, action):
@@ -172,16 +185,32 @@ class G1ClimbDREnv(gym.Env):
         w, x_, y_, z_ = d.qpos[3:7]
         roll = np.degrees(np.arctan2(2 * (w * x_ + y_ * z_), 1 - 2 * (x_**2 + y_**2)))
         pitch = np.degrees(np.arcsin(np.clip(2 * (w * y_ - z_ * x_), -1, 1)))
-        _, _, ang, lin, _, on_step, feet = self._state()
+        grav, upright, ang, lin, _, on_step, feet = self._state()
 
-        # POTENTIAL-BASED shaping (telescoping -> unmilkable) + small time cost
-        phi = self._phi()
-        r = (phi - self._prev_phi) - 0.01
+        # CLIMB drive: potential-based shaping (telescoping) gets the feet UP without
+        # being milkable. Phi here is climb-only (feet/height/forward); the STAND
+        # quality is a separate dense term below.
+        phi = self._phi_climb()
+        r = (phi - self._prev_phi)
         self._prev_phi = phi
-        r -= 0.01 * float(np.sum((a - self._last_a) ** 2))    # action smoothness
+
+        # STAND QUALITY (the fix): a single dense reward whose UNIQUE maximum is the
+        # clean stand — upright AND tall AND calm AND default-pose AND both feet.
+        # The policy was leaning forward (pitch>15) because uprightness was never in
+        # the reward; folding it into the product makes leaning strictly worse, so
+        # the milkable optimum the policy converges to IS the success pose.
+        if feet == 2:
+            up = float(np.exp(-12.0 * np.sum((grav - np.array([0, 0, -1.0])) ** 2)))
+            tall = float(np.exp(-8.0 * max(0.0, self.target_z - d.qpos[2])))
+            calm = float(np.exp(-1.0 * ang) * np.exp(-2.0 * lin))
+            leg_dev = float(np.sum((d.qpos[7:7 + 12] - self.default_pose[:12]) ** 2))
+            pose = float(np.exp(-2.0 * leg_dev))
+            r += 8.0 * up * tall * calm * pose
+        r -= 0.02                                             # small time cost (finish/settle)
+        r -= 0.01 * float(np.sum((a - self._last_a) ** 2))
         self._last_a = a
 
-        # clean platform stand: both feet up, tall, upright, on-step, CALM
+        # clean platform stand: both feet up, tall, UPRIGHT, on-step, calm
         climbed = (feet == 2 and d.qpos[2] > self.target_z - 0.06
                    and abs(roll) < 15 and abs(pitch) < 15
                    and d.qpos[0] > STEP_FRONT_X + 0.05 and abs(d.qpos[1]) < 0.25
@@ -190,15 +219,15 @@ class G1ClimbDREnv(gym.Env):
         if self._held >= HOLD_FOR:
             self._ever_success = True
 
+        # NO success-terminate: the dense stand-quality max IS the clean stand, so
+        # the policy holds it (milking the max = success). Terminating would make
+        # the policy avoid a clean hold to keep collecting; instead let it stand.
         terminated, truncated = False, False
         info = {"success": self._ever_success, "feet_on_step": feet,
                 "rsi": int(self._from_rsi), "step_h": self.step_h}
         if d.qpos[2] < 0.45 or abs(roll) > 50 or abs(pitch) > 50:
             r -= 10.0                                          # fell
             terminated = True
-        elif self._held >= HOLD_FOR:
-            r += 20.0                                          # ACHIEVEMENT bonus + stop:
-            terminated = True                                  # staying earns ~0 (potential)
-        elif self._steps >= int(EP_SECONDS / CTRL_DT):         # so terminating is strictly
-            truncated = True                                   # better -> no milking, no dawdle
+        elif self._steps >= int(EP_SECONDS / CTRL_DT):
+            truncated = True
         return self._obs(), float(r), terminated, truncated, info

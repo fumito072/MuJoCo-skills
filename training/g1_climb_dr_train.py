@@ -20,6 +20,8 @@ from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 
+from g1_climb_dr_env import H_MIN, H_MAX
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNS = os.path.join(REPO, "runs_climb")
 
@@ -32,32 +34,49 @@ def make_env(rank):
     return _f
 
 
-class SuccessLogger(BaseCallback):
-    def __init__(self):
+class AutoCurriculum(BaseCallback):
+    """Grow the randomization cap as the TOP of the current range is mastered
+    (user's expanding-range idea). Always sampling [H_MIN, cap] keeps low heights
+    practiced (no forgetting); cap only rises when the top band succeeds (gives
+    difficulty ordering). Floor-start episodes only."""
+    def __init__(self, start_cap, step, band, thresh, min_n):
         super().__init__()
-        self.hist = []   # (height, success) for floor-start episodes
+        self.cap = start_cap
+        self.step, self.band, self.thresh, self.min_n = step, band, thresh, min_n
+        self.recent = []   # rolling (height, success), floor-start only
+
+    def _on_training_start(self):
+        self.training_env.env_method("set_h_cap", self.cap)
+        print(f"[curriculum] start cap={self.cap:.2f}", flush=True)
 
     def _on_step(self):
         for info in self.locals.get("infos", []):
             ep = info.get("episode")
             if ep is not None and not ep.get("rsi"):
-                self.hist.append((float(ep.get("step_h", 0.0)),
-                                  1.0 if ep.get("success") else 0.0))
+                self.recent.append((float(ep.get("step_h", 0.0)),
+                                    1.0 if ep.get("success") else 0.0))
+        if len(self.recent) > 800:
+            self.recent = self.recent[-800:]
         return True
 
     def _on_rollout_end(self):
-        if not self.hist:
+        if not self.recent:
             return
-        recent = self.hist[-400:]
-        def rate(lo, hi):
-            v = [s for h, s in recent if lo <= h < hi]
-            return (100 * np.mean(v), len(v)) if v else (float("nan"), 0)
-        allr = 100 * np.mean([s for _, s in recent])
-        lo = rate(0.02, 0.09); mid = rate(0.09, 0.16); hi = rate(0.16, 0.221)
-        self.logger.record("custom/success_rate", float(allr) / 100)
-        print(f"[floor-start success] all {allr:.0f}% | "
-              f"low {lo[0]:.0f}%(n{lo[1]}) mid {mid[0]:.0f}%(n{mid[1]}) "
-              f"high {hi[0]:.0f}%(n{hi[1]})", flush=True)
+        band_lo = max(H_MIN, self.cap - self.band)
+        top = [s for h, s in self.recent if h >= band_lo]
+        allr = 100 * np.mean([s for _, s in self.recent])
+        topr = (100 * np.mean(top), len(top)) if top else (float("nan"), 0)
+        self.logger.record("custom/h_cap", self.cap)
+        self.logger.record("custom/success_rate",
+                           float(np.mean([s for _, s in self.recent])))
+        print(f"[curriculum] cap={self.cap:.2f} | floor success all {allr:.0f}% | "
+              f"top[{band_lo:.2f}-{self.cap:.2f}] {topr[0]:.0f}%(n{topr[1]})", flush=True)
+        if self.cap < H_MAX and topr[1] >= self.min_n and topr[0] >= self.thresh * 100:
+            self.cap = min(H_MAX, round(self.cap + self.step, 3))
+            self.training_env.env_method("set_h_cap", self.cap)
+            self.recent = []
+            print(f"[curriculum] >>> MASTERED top band, EXPAND cap -> {self.cap:.2f}",
+                  flush=True)
 
 
 def main():
@@ -67,6 +86,11 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--resume", type=str, default=None)
     ap.add_argument("--ent_coef", type=float, default=0.005)
+    ap.add_argument("--start_cap", type=float, default=0.04)
+    ap.add_argument("--cap_step", type=float, default=0.01)
+    ap.add_argument("--cap_band", type=float, default=0.03)
+    ap.add_argument("--cap_thresh", type=float, default=0.4)
+    ap.add_argument("--cap_min_n", type=int, default=80)
     args = ap.parse_args()
 
     os.makedirs(RUNS, exist_ok=True)
@@ -88,8 +112,10 @@ def main():
 
     ckpt = CheckpointCallback(save_freq=max(1_000_000 // args.envs, 1),
                               save_path=RUNS, name_prefix=name, save_vecnormalize=True)
+    curric = AutoCurriculum(args.start_cap, args.cap_step, args.cap_band,
+                            args.cap_thresh, args.cap_min_n)
     try:
-        model.learn(total_timesteps=args.steps, callback=[ckpt, SuccessLogger()],
+        model.learn(total_timesteps=args.steps, callback=[ckpt, curric],
                     reset_num_timesteps=not bool(args.resume))
     finally:
         model.save(os.path.join(RUNS, name + "_latest"))
