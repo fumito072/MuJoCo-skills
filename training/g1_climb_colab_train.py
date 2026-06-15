@@ -4,16 +4,22 @@
 #  CELL 2 has the full env inlined, so you can copy-paste straight from this file.
 # ============================================================================
 
-# === CELL 1 — install + GPU/version asserts (run once; ~4 min) ===
+# === CELL 1 — install + asserts. RUN THIS FIRST in every (re)started runtime. ===
+# IMPORTANT: a Colab restart/reset wipes pip installs. If you restart the runtime,
+# RE-RUN CELL 1 before CELL 2/3, or you'll get "No module named mujoco".
 import subprocess
 print(subprocess.run(["nvidia-smi","-L"], capture_output=True, text=True).stdout or "NO GPU!")
-%pip -q install playground "jax[cuda12]" orbax-checkpoint
+# install mujoco/mjx explicitly (don't rely on playground pulling them) + a CUDA jax
+%pip -q install mujoco mujoco-mjx playground brax "jax[cuda12]" orbax-checkpoint mediapy
+import importlib
+for mod in ("mujoco", "mujoco.mjx", "jax", "brax", "mujoco_playground", "flax", "orbax.checkpoint"):
+    importlib.import_module(mod)               # fail loudly here if any didn't install
 import inspect, jax, brax
 from brax.training.agents.ppo import train as _ppo
 assert "save_checkpoint_path" in inspect.signature(_ppo.train).parameters, "brax too old: %pip install -U brax"
 assert "wrap_env_fn" in inspect.signature(_ppo.train).parameters, "brax too old: %pip install -U brax"
 assert any(d.platform == "gpu" for d in jax.devices()), \
-    "No GPU visible — jax を入れ直した直後なら Runtime->Restart runtime してから CELL 1 を再実行"
+    "No GPU visible — Runtime->Restart runtime, then RE-RUN CELL 1 (don't skip it)"
 print("OK: brax", brax.__version__, "| jax", jax.__version__, "|", jax.devices())
 
 
