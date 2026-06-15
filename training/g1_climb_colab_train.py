@@ -17,17 +17,17 @@
 # === CELL 1 — install + GPU/version asserts (run once; ~4 min) ===
 import subprocess
 print(subprocess.run(["nvidia-smi","-L"], capture_output=True, text=True).stdout or "NO GPU!")
-# mujoco_playground pulls a compatible mujoco/mjx; pin a brax new enough to have
-# save_checkpoint_path + wrap_env_fn (0.10.x lacks both). jax[cuda12] for the GPU.
-%pip -q install "mujoco_playground>=0.0.4" "brax>=0.12.1" orbax-checkpoint
-%pip -q install -U "jax[cuda12]"
+# MuJoCo Playground's PyPI package is `playground` (imports as mujoco_playground);
+# it pulls a compatible brax/mujoco/mjx. jax[cuda12] in the SAME install so the
+# resolver keeps a CUDA jax (a separate -U jax can desync and need a restart).
+%pip -q install playground "jax[cuda12]" orbax-checkpoint
 import inspect, jax, brax
 from brax.training.agents.ppo import train as _ppo
 assert "save_checkpoint_path" in inspect.signature(_ppo.train).parameters, "brax too old: %pip install -U brax"
 assert "wrap_env_fn" in inspect.signature(_ppo.train).parameters, "brax too old: %pip install -U brax"
-assert any(d.platform == "gpu" for d in jax.devices()), "No GPU — Runtime->Change runtime type->GPU, then rerun CELL 1"
+assert any(d.platform == "gpu" for d in jax.devices()), \
+    "No GPU visible — if jax was just (re)installed: Runtime->Restart runtime, then rerun CELL 1"
 print("OK: brax", brax.__version__, "| jax", jax.__version__, "|", jax.devices())
-# NOTE: if the jax[cuda12] line REINSTALLED jax, do Runtime->Restart, then rerun CELL 1 once.
 
 
 # === CELL 2 — Drive + clone repo + env + HEIGHT DOMAIN RANDOMIZATION ===
