@@ -168,7 +168,17 @@ class G1ClimbBox(g1_joystick.Joystick):
         self._mjx_model = mjx.put_model(m, impl=self._config.impl)
         self._lf_gid = m.geom("left_foot").id
         self._rf_gid = m.geom("right_foot").id
+        self._plat_gid = m.geom("platform").id
         self._post_init()
+
+    # HEIGHT-AWARE helpers (2026-06-15): read the platform height PER ENV so a
+    # domain-randomization fn can vary it. With no DR these return the fixed 0.22.
+    # A geom at pos_z=h/2, size_z=h/2 sits on the floor with its TOP at h.
+    def _plat_h_model(self):                 # in reset (self.mjx_model is per-env under DR)
+        return 2.0 * self.mjx_model.geom_pos[self._plat_gid, 2]
+
+    def _plat_h_data(self, data):            # in reward/obs (geom_xpos is per-env)
+        return 2.0 * data.geom_xpos[self._plat_gid, 2]
 
     def sample_command(self, rng):
         del rng
@@ -178,6 +188,7 @@ class G1ClimbBox(g1_joystick.Joystick):
     def reset(self, rng: jax.Array) -> mjx_env.State:
         qpos = self._init_q
         qvel = jp.zeros(self.mjx_model.nv)
+        plat_h = self._plat_h_model()         # per-env platform height (DR-aware)
 
         rng, k_mode, k1, k2, k3, k4, k5, kd1, kd2 = jax.random.split(rng, 9)
         u = jax.random.uniform(k_mode)
@@ -196,7 +207,7 @@ class G1ClimbBox(g1_joystick.Joystick):
         yaw_b = jax.random.uniform(k1, (), minval=-jp.pi / 2 - 0.1,
                                    maxval=jp.pi / 2 + 0.1)
         crouch = jax.random.uniform(k4, (), minval=0.0, maxval=0.30)
-        pos_b = jp.array([0.0, 0.33, qpos[2] + 0.22 - crouch * 0.3])
+        pos_b = jp.array([0.0, 0.33, qpos[2] + plat_h - crouch * 0.3])
         pos_b = pos_b.at[0].add(jax.random.uniform(k2, (), minval=-0.05, maxval=0.05))
         pos_b = pos_b.at[1].add(jax.random.uniform(k3, (), minval=-0.04, maxval=0.06))
 
@@ -334,8 +345,9 @@ class G1ClimbBox(g1_joystick.Joystick):
         ex = jp.cos(yaw) * exw + jp.sin(yaw) * eyw
         ey = -jp.sin(yaw) * exw + jp.cos(yaw) * eyw
         # gravity/IMU are yaw-invariant: without these 5 dims the turn-to-goal
-        # is unobservable (on HW they come from chair-frame localization)
-        extra = jp.array([jp.sin(ye), jp.cos(ye), ex, ey, base[2]])
+        # is unobservable (on HW they come from chair-frame localization).
+        # +plat_h so the policy knows the step height it faces (domain randomized).
+        extra = jp.array([jp.sin(ye), jp.cos(ye), ex, ey, base[2], self._plat_h_data(data)])
         if isinstance(obs, dict):
             return {k: jp.concatenate([v, extra]) for k, v in obs.items()}
         return jp.concatenate([obs, extra])
@@ -349,16 +361,20 @@ class G1ClimbBox(g1_joystick.Joystick):
         w, x_, y_, z_ = data.qpos[3], data.qpos[4], data.qpos[5], data.qpos[6]
         yaw = jp.arctan2(2 * (w * z_ + x_ * y_), 1 - 2 * (y_ * y_ + z_ * z_))
         ye = jp.mod(yaw - YAW_GOAL + jp.pi, 2 * jp.pi) - jp.pi
+        plat_h = self._plat_h_data(data)              # per-env platform height (DR-aware)
+        stand_z = 0.755 + plat_h                       # pelvis height standing on top
         dist = jp.linalg.norm(base[0:2] - TARGET)
-        dz = jp.abs(base[2] - 0.975)
+        dz = jp.abs(base[2] - stand_z)
 
         # absolute potential (no per-step delta plumbing needed in this API)
         rewards["climb_target"] = jp.exp(-2.5 * dist) + 1.2 * jp.exp(-6.0 * dz)
 
-        # feet geometrically on the platform (contact proxy; MJX-cheap)
+        # feet geometrically on the platform TOP (per-env height; contact proxy).
+        # gate on the platform-top band so a foot grazing the front face/edge of a
+        # low step is NOT a false positive (a trap we hit on CPU).
         def on_plat(gid):
             p = data.geom_xpos[gid]
-            return ((p[2] > 0.20) & (p[2] < 0.30)
+            return ((p[2] > plat_h - 0.03) & (p[2] < plat_h + 0.08)
                     & (jp.abs(p[0]) < PLAT_HALF[0])
                     & (jp.abs(p[1] - PLAT_CENTER[1]) < PLAT_HALF[1]))
         lf = on_plat(self._lf_gid)
@@ -366,10 +382,12 @@ class G1ClimbBox(g1_joystick.Joystick):
         feet = lf.astype(jp.float32) + rf.astype(jp.float32)
         rewards["climb_feet"] = 0.15 * feet + 0.6 * (feet == 2)
 
-        # the goal region pays PER STEP: stand on target, upright, facing +y
+        # the goal region pays PER STEP: stand on target, upright, facing +y.
+        # BRIEF arrival is enough — the stiff gains / mission FSM hold the stand
+        # (forcing RL to hold a long still stand was the CPU dead-end).
         up = self.get_gravity(data, "torso")
         upright = jp.exp(-jp.sum(jp.square(up - jp.array([0.073, 0.0, 1.0]))) / 0.1)
-        standing = ((feet == 2) & (base[2] > 0.92) & (dist < 0.15)
+        standing = ((feet == 2) & (base[2] > stand_z - 0.055) & (dist < 0.15)
                     & (jp.abs(ye) < 0.45))
         rewards["climb_stand"] = jp.where(standing, 5.0 * upright, 0.0)
 
