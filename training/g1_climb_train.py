@@ -34,9 +34,14 @@ def make_env(rank):
 
 
 class SuccessLogger(BaseCallback):
+    """Logs success + drives the GOLDILOCKS adaptive reverse-curriculum: keep the
+    success rate near ~50% by annealing rsi_min_phase (the episode start point) from
+    the lunge (~0.45) toward 0.0 (full floor climb). When min_phase reaches 0 with
+    success holding, the full floor->platform climb is solved."""
     def __init__(self):
         super().__init__()
         self.hist = []
+        self.min_phase = float(os.environ.get("RSI_MIN_PHASE", 0.45))
 
     def _on_step(self):
         for info in self.locals.get("infos", []):
@@ -45,11 +50,24 @@ class SuccessLogger(BaseCallback):
         return True
 
     def _on_rollout_end(self):
-        if self.hist:
-            recent = self.hist[-200:]
-            self.logger.record("custom/success_rate", float(np.mean(recent)))
-            print(f"[success_rate last {len(recent)} eps] {np.mean(recent) * 100:.1f}%",
-                  flush=True)
+        if not self.hist:
+            return
+        recent = self.hist[-200:]
+        sr = float(np.mean(recent))
+        self.logger.record("custom/success_rate", sr)
+        self.logger.record("custom/rsi_min_phase", self.min_phase)
+        # Goldilocks: success high -> start EARLIER (harder); low -> start later
+        if len(recent) >= 150:
+            if sr > 0.55 and self.min_phase > 0.0:
+                self.min_phase = max(0.0, round(self.min_phase - 0.02, 3))
+                self.training_env.env_method("set_rsi_min_phase", self.min_phase)
+                self.hist = []                      # reset stats after a difficulty change
+            elif sr < 0.35 and self.min_phase < 0.9:
+                self.min_phase = min(0.9, round(self.min_phase + 0.02, 3))
+                self.training_env.env_method("set_rsi_min_phase", self.min_phase)
+                self.hist = []
+        print(f"[success {sr * 100:.0f}% | rsi_min_phase {self.min_phase:.2f} "
+              f"(0=full floor climb)]", flush=True)
 
 
 def main():

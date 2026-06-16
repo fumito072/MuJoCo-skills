@@ -61,6 +61,16 @@ class G1ClimbMimicEnv(gym.Env):
         self.observation_space = spaces.Box(-np.inf, np.inf, (57,), np.float32)
         self._last_a = np.zeros(12, np.float32)
         self._k = 0
+        # reverse curriculum (EvoCoT) + Goldilocks adaptive difficulty: episodes
+        # start in [rsi_min_phase, 1.0] of the reference. Start near the lunge so the
+        # policy masters the LAST push (single-leg rise + trail-foot transfer) where
+        # it was stuck; the trainer anneals rsi_min_phase toward 0 (full floor climb)
+        # to keep success ~50% (the "edge of ability"). lunge is at phase ~0.5.
+        self.rsi_min_phase = float(os.environ.get("RSI_MIN_PHASE", 0.45))
+
+    def set_rsi_min_phase(self, p):
+        self.rsi_min_phase = float(np.clip(p, 0.0, 0.95))
+        return self.rsi_min_phase
 
     def _foot_contacts(self):
         on = {self.lf: 0.0, self.rf: 0.0}
@@ -103,14 +113,12 @@ class G1ClimbMimicEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetDataKeyframe(self.m, self.d, self.key)
-        # RSI: the trail-foot transfer (frames ~337-377) is the hard part the policy
-        # couldn't execute (it tracked the whole motion but arrived one-foot / z0.86).
-        # Old beta(1.2,2.0) was EARLY-weighted -> barely practiced the transfer. Now:
-        # 25% full climb from frame 0, 75% DENSE on the late transfer+stand phase.
-        if self.rng.random() < 0.25:
-            self._k = 0
-        else:
-            self._k = int(self.rng.beta(2.2, 1.3) * (REF_N - 1))
+        # reverse-curriculum RSI: spawn uniformly in [rsi_min_phase, 1.0] of the
+        # reference. Early training rsi_min_phase ~0.45 (start at the lunge -> learn
+        # the last push); the Goldilocks trainer anneals it toward 0 as success rises,
+        # so the policy masters the hard ending first then extends back to the floor.
+        lo = self.rsi_min_phase + (1.0 - self.rsi_min_phase) * self.rng.random()
+        self._k = int(lo * (REF_N - 1))
         rl, rb = self._ref(self._k)
         yaw0 = YAW_REF + self.rng.uniform(-0.08, 0.08)
         self.d.qpos[0:3] = (self.rng.uniform(-0.04, 0.04),
