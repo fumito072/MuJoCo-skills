@@ -75,10 +75,18 @@ def main():
         print(f"resumed from {args.resume} lr_end={args.lr_end}")
     else:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
+        # LR schedule on FRESH runs too: constant 3e-4 diverged late (this session
+        # we confirmed PPO over-updates into a destructive regime); anneal to lr_end.
+        if args.lr_end is not None:
+            lo, hi_ = args.lr_end, args.lr_start
+            lr = lambda progress: lo + (hi_ - lo) * progress   # progress 1->0
+        else:
+            lr = args.lr_start
         model = PPO(
             "MlpPolicy", venv, verbose=1, device="cpu",
-            n_steps=512, batch_size=4096, learning_rate=3e-4,
+            n_steps=512, batch_size=4096, learning_rate=lr,
             gamma=0.99, gae_lambda=0.95, ent_coef=0.005, clip_range=0.2,
+            target_kl=0.03,                                    # cap updates (anti-divergence)
             policy_kwargs=dict(net_arch=[256, 256]),
             tensorboard_log=None,
         )
