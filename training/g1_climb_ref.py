@@ -43,10 +43,15 @@ KEY_FRAMES = [
     (2.8, {6: -1.20, 9: 1.20, 10: -0.10},                    0.60, 0.750),  # R plant (foot ~y0.40 z0.22)
     (3.6, {6: -0.45, 9: 0.70, 10: 0.05, 0: -0.20, 3: 0.90, 4: 0.30},
                                                              0.50, 0.870),  # lunge: rise over R foot
-    (4.2, {6: -0.31, 9: 0.63, 10: -0.30, 0: -1.10, 3: 1.90, 4: -0.40},
-                                                             0.44, 0.940),  # L trail leg up
-    (4.6, {0: -0.31, 3: 0.63, 4: -0.30},                     0.41, 0.975),  # L plant beside, stand
-    (5.2, {},                                                0.40, 0.975),  # hold stand
+    # the single-leg push + trail-foot transfer (below) was the WALL — the policy
+    # tracked the whole climb but got stuck one-foot / z0.87 here. STRETCH it ~2.4x
+    # and SETTLE in the lunge first so it's quasi-static = trackable (rising on one
+    # leg + bringing the trail foot up needs time to balance, not a fast snap).
+    (4.6, {},                                                0.48, 0.885),  # SETTLE in the lunge
+    (5.8, {6: -0.31, 9: 0.63, 10: -0.30, 0: -1.10, 3: 1.90, 4: -0.40},
+                                                             0.44, 0.940),  # L trail leg up (slow)
+    (6.8, {0: -0.31, 3: 0.63, 4: -0.30},                     0.41, 0.975),  # L plant beside, stand (slow)
+    (7.4, {},                                                0.40, 0.975),  # hold stand
 ]
 
 KEY_FRAMES = [(t * TSCALE, d_, y, z) for t, d_, y, z in KEY_FRAMES]
