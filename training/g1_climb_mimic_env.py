@@ -103,8 +103,14 @@ class G1ClimbMimicEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetDataKeyframe(self.m, self.d, self.key)
-        # RSI: spawn at a random reference frame (early frames more often)
-        self._k = int(self.rng.beta(1.2, 2.0) * (REF_N - 1))
+        # RSI: the trail-foot transfer (frames ~337-377) is the hard part the policy
+        # couldn't execute (it tracked the whole motion but arrived one-foot / z0.86).
+        # Old beta(1.2,2.0) was EARLY-weighted -> barely practiced the transfer. Now:
+        # 25% full climb from frame 0, 75% DENSE on the late transfer+stand phase.
+        if self.rng.random() < 0.25:
+            self._k = 0
+        else:
+            self._k = int(self.rng.beta(2.2, 1.3) * (REF_N - 1))
         rl, rb = self._ref(self._k)
         yaw0 = YAW_REF + self.rng.uniform(-0.08, 0.08)
         self.d.qpos[0:3] = (self.rng.uniform(-0.04, 0.04),
