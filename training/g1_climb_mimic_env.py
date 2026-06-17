@@ -113,12 +113,17 @@ class G1ClimbMimicEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetDataKeyframe(self.m, self.d, self.key)
-        # reverse-curriculum RSI: spawn uniformly in [rsi_min_phase, 1.0] of the
-        # reference. Early training rsi_min_phase ~0.45 (start at the lunge -> learn
-        # the last push); the Goldilocks trainer anneals it toward 0 as success rises,
-        # so the policy masters the hard ending first then extends back to the floor.
-        lo = self.rsi_min_phase + (1.0 - self.rsi_min_phase) * self.rng.random()
-        self._k = int(lo * (REF_N - 1))
+        # reverse-curriculum RSI + frame-0 CONSOLIDATION. The Goldilocks curriculum
+        # rode min_phase to 0 (policy can do every PIECE), but the full chain from the
+        # floor still degraded (under-practiced). So spawn 50% at frame 0 (full climb,
+        # consolidate the whole chain) + 50% frontier-weighted in [min_phase, 1] (keep
+        # the hard ending sharp). Frontier weighting (square) concentrates near the
+        # current frontier, i.e. frame 0 once min_phase==0.
+        if self.rng.random() < 0.5:
+            self._k = 0
+        else:
+            lo = self.rsi_min_phase + (1.0 - self.rsi_min_phase) * self.rng.random() ** 2
+            self._k = int(lo * (REF_N - 1))
         rl, rb = self._ref(self._k)
         yaw0 = YAW_REF + self.rng.uniform(-0.08, 0.08)
         self.d.qpos[0:3] = (self.rng.uniform(-0.04, 0.04),

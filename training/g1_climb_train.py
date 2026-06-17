@@ -62,8 +62,8 @@ class SuccessLogger(BaseCallback):
                 self.min_phase = max(0.0, round(self.min_phase - 0.02, 3))
                 self.training_env.env_method("set_rsi_min_phase", self.min_phase)
                 self.hist = []                      # reset stats after a difficulty change
-            elif sr < 0.35 and self.min_phase < 0.9:
-                self.min_phase = min(0.9, round(self.min_phase + 0.02, 3))
+            elif sr < 0.15 and self.min_phase < 0.9:    # sticky-low: only back off if
+                self.min_phase = min(0.9, round(self.min_phase + 0.02, 3))  # really stuck
                 self.training_env.env_method("set_rsi_min_phase", self.min_phase)
                 self.hist = []
         print(f"[success {sr * 100:.0f}% | rsi_min_phase {self.min_phase:.2f} "
