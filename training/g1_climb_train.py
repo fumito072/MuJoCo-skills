@@ -25,7 +25,9 @@ RUNS = os.path.join(REPO, "runs_climb")
 def make_env(rank):
     def _f():
         from stable_baselines3.common.monitor import Monitor
-        if os.environ.get("MIMIC"):
+        if os.environ.get("BRACE"):
+            from g1_climb_brace_env import G1ClimbBraceEnv as Env
+        elif os.environ.get("MIMIC"):
             from g1_climb_mimic_env import G1ClimbMimicEnv as Env
         else:
             from g1_climb_env import G1ClimbEnv as Env
@@ -57,10 +59,12 @@ class SuccessLogger(BaseCallback):
         self.logger.record("custom/success_rate", sr)
         self.logger.record("custom/rsi_min_phase", self.min_phase)
         # Goldilocks: success high -> start EARLIER (harder, toward the floor); low ->
-        # start later (easier, toward the goal). Threshold 0.5 (was 0.55) now that the
-        # success metric is clean (pure reverse curriculum, no frame-0 pollution).
+        # start later (easier, toward the goal). Descent threshold tunable via SR_DESCEND
+        # (brace climb stalls ~40% at the hard brace->rise transition; lower it to push
+        # the curriculum down through that region).
+        sr_desc = float(os.environ.get("SR_DESCEND", 0.5))
         if len(recent) >= 120:
-            if sr > 0.5 and self.min_phase > 0.0:
+            if sr > sr_desc and self.min_phase > 0.0:
                 self.min_phase = max(0.0, round(self.min_phase - 0.03, 3))
                 self.training_env.env_method("set_rsi_min_phase", self.min_phase)
                 self.hist = []                      # reset stats after a difficulty change
