@@ -56,10 +56,12 @@ class SuccessLogger(BaseCallback):
         sr = float(np.mean(recent))
         self.logger.record("custom/success_rate", sr)
         self.logger.record("custom/rsi_min_phase", self.min_phase)
-        # Goldilocks: success high -> start EARLIER (harder); low -> start later
-        if len(recent) >= 150:
-            if sr > 0.55 and self.min_phase > 0.0:
-                self.min_phase = max(0.0, round(self.min_phase - 0.02, 3))
+        # Goldilocks: success high -> start EARLIER (harder, toward the floor); low ->
+        # start later (easier, toward the goal). Threshold 0.5 (was 0.55) now that the
+        # success metric is clean (pure reverse curriculum, no frame-0 pollution).
+        if len(recent) >= 120:
+            if sr > 0.5 and self.min_phase > 0.0:
+                self.min_phase = max(0.0, round(self.min_phase - 0.03, 3))
                 self.training_env.env_method("set_rsi_min_phase", self.min_phase)
                 self.hist = []                      # reset stats after a difficulty change
             elif sr < 0.15 and self.min_phase < 0.9:    # sticky-low: only back off if

@@ -113,17 +113,19 @@ class G1ClimbMimicEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         mujoco.mj_resetDataKeyframe(self.m, self.d, self.key)
-        # reverse-curriculum RSI + frame-0 CONSOLIDATION. The Goldilocks curriculum
-        # rode min_phase to 0 (policy can do every PIECE), but the full chain from the
-        # floor still degraded (under-practiced). So spawn 50% at frame 0 (full climb,
-        # consolidate the whole chain) + 50% frontier-weighted in [min_phase, 1] (keep
-        # the hard ending sharp). Frontier weighting (square) concentrates near the
-        # current frontier, i.e. frame 0 once min_phase==0.
-        if self.rng.random() < 0.5:
-            self._k = 0
-        else:
-            lo = self.rsi_min_phase + (1.0 - self.rsi_min_phase) * self.rng.random() ** 2
-            self._k = int(lo * (REF_N - 1))
+        # PURE reverse curriculum (frontier-weighted). Earlier we mixed in 50% frame-0
+        # "consolidation", but those (failing) full-climb episodes POLLUTED the Goldilocks
+        # success metric — their failures pinned the mix at ~48%, just under the 0.5
+        # descent threshold, so min_phase froze at 0.84 and phases 0-0.84 were NEVER
+        # practiced (the trail-foot transfer, where the policy now reaches z1.0 but can't
+        # stick the plant). Fix: start purely in [min_phase, 1], square-weighted toward
+        # min_phase so the hardest CURRENT stage gets the most reps. As the trainer
+        # anneals min_phase->0 the start spreads to the floor, consolidating the full
+        # chain WITHOUT a separate metric-polluting branch — frame 0 is the limit of the
+        # same distribution, not a special case.
+        lo = self.rsi_min_phase + (1.0 - self.rsi_min_phase) * self.rng.random() ** 2
+        self._k = int(lo * (REF_N - 1))
+        self._start_phase = self._k / REF_N
         rl, rb = self._ref(self._k)
         yaw0 = YAW_REF + self.rng.uniform(-0.08, 0.08)
         self.d.qpos[0:3] = (self.rng.uniform(-0.04, 0.04),
