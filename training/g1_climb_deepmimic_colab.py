@@ -311,3 +311,42 @@ import pickle
 with open(f"{CKPT_DIR}/g1_climb_dm_params.pkl", "wb") as f:
     pickle.dump(params, f)
 print("saved ->", f"{CKPT_DIR}/g1_climb_dm_params.pkl")
+
+
+# === CELL 6 — PEEK: eval the latest checkpoint WITHOUT finishing CELL 3 ===
+# See the REAL floor-start N/20 mid-training, so you can stop as soon as it's good
+# (no need to sit through all 300M). Verified on local CPU MJX.
+#   1) Runtime -> Interrupt execution  (stops CELL 3; the Drive checkpoint is safe)
+#   2) Run THIS cell                   (needs CELL 1+2 already run this session)
+#   3) Re-run CELL 3 to RESUME from the same checkpoint (or CELL 5 to save & stop)
+# Uses the low-level load() + manual inference rebuild (load_policy has a brax config
+# quirk on some versions; this path is version-independent).
+from brax.training.agents.ppo import checkpoint as ppo_ckpt, networks as ppo_networks
+from brax.training.acme import running_statistics
+from etils import epath
+import functools, jax, jax.numpy as jp
+def _latest(d):
+    p = epath.Path(d)
+    dd = [c for c in p.iterdir() if c.is_dir() and c.name.isdigit()] if p.exists() else []
+    return max(dd, key=lambda c: int(c.name)).as_posix() if dd else None
+_CK = _latest(CKPT_DIR); print("eval checkpoint:", _CK)
+_nf = functools.partial(ppo_networks.make_ppo_networks,
+    policy_obs_key="state", value_obs_key="privileged_state",
+    policy_hidden_layer_sizes=(512, 256, 128), value_hidden_layer_sizes=(512, 256, 128))
+_params = ppo_ckpt.load(_CK)
+_net = _nf(env.observation_size, env.action_size,
+           preprocess_observations_fn=running_statistics.normalize)
+_infer = jax.jit(ppo_networks.make_inference_fn(_net)(_params, deterministic=True))
+_reset, _step = jax.jit(env.reset), jax.jit(env.step)
+_succ = 0
+for i in range(20):
+    st = _reset(jax.random.PRNGKey(7000 + i)); st.info["ref_frame0"] = jp.int32(0)
+    ever = False
+    for _ in range(400):
+        act = _infer(st.obs, jax.random.PRNGKey(0))[0]
+        st = _step(st, act)
+        ever = ever or bool(st.metrics.get("reward/climb_stand", 0.0) > 0.3)
+        if st.done:
+            break
+    _succ += int(ever)
+print(f"FLOOR-START full climb @ latest checkpoint: {_succ}/20")
