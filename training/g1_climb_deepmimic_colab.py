@@ -192,14 +192,20 @@ class G1ClimbDeepMimic(g1_joystick.Joystick):
 
     def _cur_frame(self, info):
         # base Joystick.step() increments info["step"] and PRESERVES custom keys, so
-        # the phase advances without overriding step(). ref_frame0 is set in reset().
+        # the phase advances. ref_frame0 is set in reset().
         return jp.clip(info["ref_frame0"] + info["step"], 0, REF_N - 1)
 
-    # NOTE: we deliberately do NOT override step() — the base Joystick maps action to
-    # motor targets (default_pose + scale*action) and we let it. The DeepMimic scaffold
-    # comes from reference RSI (reset) + the tracking reward (_get_reward) + ref obs.
-    # OPTIONAL UPGRADE once this runs: residual control (motor = ref_legs + scale*action)
-    # is more sample-efficient but needs the exact base action mapping — add it then.
+    # RESIDUAL control: the action CORRECTS the reference instead of regenerating the
+    # whole motion. The base maps motor = default_pose + action*scale; we add an offset
+    # so motor_legs = REF_LEGS[frame] + action_legs*scale (default cancels out), i.e.
+    # zero action == track the reference exactly. Verified on local MJX: zero-action
+    # tracking already climbs ~33% open-loop, so the policy only learns to STABILIZE.
+    # (v1 non-residual plateaued at 40%/0/20-cracked; residual should beat that.)
+    def step(self, state, action):
+        frame = self._cur_frame(state.info)
+        off = jp.zeros(self.mjx_model.nu).at[0:12].set(
+            (REF_LEGS[frame] - self._default_pose[0:12]) / self._config.action_scale)
+        return super().step(state, action + off)
 
     # ------------------------------------------------------------------- obs --
     def _get_obs(self, data, info, contact):
