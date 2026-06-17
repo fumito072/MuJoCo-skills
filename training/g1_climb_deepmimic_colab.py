@@ -48,7 +48,10 @@ from mujoco_playground._src.locomotion.g1 import g1_constants as consts
 from mujoco_playground._src.locomotion.g1 import base as g1_base
 
 drive.mount("/content/drive")
-CKPT_DIR = "/content/drive/MyDrive/g1_climb_dm_ckpts"
+# v2 = residual control: a FRESH dir so it doesn't try to resume the v1 (absolute-
+# action) checkpoint, which has incompatible action semantics. v1's 40% run stays in
+# the old g1_climb_dm_ckpts folder, untouched.
+CKPT_DIR = "/content/drive/MyDrive/g1_climb_dm_v2_ckpts"
 os.makedirs(CKPT_DIR, exist_ok=True)
 
 # --- CoM-IK leg-climb reference EMBEDDED as base64 (561 frames: 12 leg joints +
