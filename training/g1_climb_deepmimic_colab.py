@@ -293,15 +293,29 @@ make_inference_fn, params, _ = ppo.train(
 print("DONE. latest checkpoint:", latest_ckpt(CKPT_DIR))
 
 
-# === CELL 4 — eval the full floor-start climb (frame 0, deterministic) ===
-def eval_floor(n=20):
-    infer = jax.jit(make_inference_fn(params, deterministic=True))
-    reset, step = jax.jit(env.reset), jax.jit(env.step)
-    succ = 0
+# === CELL 4 — eval the TRUE floor-start climb (frame 0 qpos forced) ===
+# CRITICAL: env.reset() spawns at a RANDOM reference frame; setting ref_frame0=0 only
+# relabels the PHASE, not the pose — so the robot can start already on the platform and
+# "succeed" trivially (this bug inflated an earlier eval to a fake 40%). To measure the
+# REAL floor climb we FORCE qpos to frame 0 (y0.68, z0.755 on the floor). The printed
+# start_z MUST be ~0.755 or the eval is lying.
+from mujoco import mjx as _mjx
+def _floor_state(seed):
+    st = env.reset(jax.random.PRNGKey(seed))
+    rl0, rb0 = REF_LEGS[0], REF_BASE[0]
+    base = jp.array([0.0, rb0[0], rb0[1]])
+    quat = jp.array([jp.cos(REF_YAW / 2), 0., 0., jp.sin(REF_YAW / 2)])
+    joints = st.data.qpos[7:].at[0:12].set(rl0)
+    data = _mjx.forward(env.mjx_model, st.data.replace(
+        qpos=jp.concatenate([base, quat, joints]), qvel=jp.zeros_like(st.data.qvel)))
+    contact = jp.array([data.sensordata[env._mj_model.sensor_adr[s]] > 0
+                        for s in env._feet_floor_found_sensor])
+    info = dict(st.info); info["ref_frame0"] = jp.int32(0); info["step"] = jp.int32(0)
+    return st.replace(data=data, obs=env._get_obs(data, info, contact), info=info)
+def eval_floor(infer, n=20):
+    step = jax.jit(env.step); succ = 0; sz = 0.0
     for i in range(n):
-        st = reset(jax.random.PRNGKey(7000 + i))
-        # force floor start = reference frame 0
-        st.info["ref_frame0"] = jp.int32(0)
+        st = _floor_state(7000 + i); sz = float(st.data.qpos[2])
         ever = False
         for _ in range(400):
             act = infer(st.obs, jax.random.PRNGKey(0))[0]
@@ -310,9 +324,9 @@ def eval_floor(n=20):
             if st.done:
                 break
         succ += int(ever)
-    return succ, n
-s, n = eval_floor()
-print(f"FLOOR-START full climb: reached platform-stand on {s}/{n}")
+    return succ, n, sz
+s, n, sz = eval_floor(jax.jit(make_inference_fn(params, deterministic=True)))
+print(f"TRUE FLOOR-START full climb: {s}/{n}  (start_z {sz:.3f} — must be ~0.755 = floor)")
 
 
 # === CELL 5 — save params for Mac inference ===
@@ -346,10 +360,25 @@ _params = ppo_ckpt.load(_CK)
 _net = _nf(env.observation_size, env.action_size,
            preprocess_observations_fn=running_statistics.normalize)
 _infer = jax.jit(ppo_networks.make_inference_fn(_net)(_params, deterministic=True))
-_reset, _step = jax.jit(env.reset), jax.jit(env.step)
-_succ = 0
+_step = jax.jit(env.step)
+# TRUE floor start: FORCE qpos to frame 0 (reset alone spawns a random reference frame;
+# relabeling ref_frame0 is NOT enough — that bug faked an earlier 40%). start_z must be ~0.755.
+from mujoco import mjx as _mjx
+def _floor_state(seed):
+    st = env.reset(jax.random.PRNGKey(seed))
+    rl0, rb0 = REF_LEGS[0], REF_BASE[0]
+    data = _mjx.forward(env.mjx_model, st.data.replace(
+        qpos=jp.concatenate([jp.array([0., rb0[0], rb0[1]]),
+                             jp.array([jp.cos(REF_YAW/2), 0., 0., jp.sin(REF_YAW/2)]),
+                             st.data.qpos[7:].at[0:12].set(rl0)]),
+        qvel=jp.zeros_like(st.data.qvel)))
+    contact = jp.array([data.sensordata[env._mj_model.sensor_adr[s]] > 0
+                        for s in env._feet_floor_found_sensor])
+    info = dict(st.info); info["ref_frame0"] = jp.int32(0); info["step"] = jp.int32(0)
+    return st.replace(data=data, obs=env._get_obs(data, info, contact), info=info)
+_succ = 0; _sz = 0.0
 for i in range(20):
-    st = _reset(jax.random.PRNGKey(7000 + i)); st.info["ref_frame0"] = jp.int32(0)
+    st = _floor_state(7000 + i); _sz = float(st.data.qpos[2])
     ever = False
     for _ in range(400):
         act = _infer(st.obs, jax.random.PRNGKey(0))[0]
@@ -358,4 +387,4 @@ for i in range(20):
         if st.done:
             break
     _succ += int(ever)
-print(f"FLOOR-START full climb @ latest checkpoint: {_succ}/20")
+print(f"TRUE FLOOR-START climb @ latest checkpoint: {_succ}/20  (start_z {_sz:.3f} = floor)")
