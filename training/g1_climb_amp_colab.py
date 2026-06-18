@@ -44,7 +44,7 @@ from brax.training.agents.ppo import losses as ppo_losses
 from brax.training.agents.ppo import networks as ppo_networks
 
 drive.mount("/content/drive")
-CKPT_DIR = "/content/drive/MyDrive/g1_climb_amp_ckpts"   # FRESH dir (AMP != DeepMimic)
+CKPT_DIR = "/content/drive/MyDrive/g1_climb_amp_ckpts_v2"   # FRESH dir (v2 = boosted task reward)
 os.makedirs(CKPT_DIR, exist_ok=True)
 
 # --- CoM-IK leg-climb reference EMBEDDED (no download/push) ---
@@ -164,8 +164,9 @@ def climb_config():
     s.orientation = -0.5
     s.alive = 0.2
     # NO climb_mimic — AMP replaces per-frame tracking with the discriminator style.
-    s.climb_feet = 0.5        # both feet on the platform top (TASK)
-    s.climb_stand = 2.0       # brief upright stand on top = the goal (TASK)
+    s.climb_target = 10.0     # dense: approach the platform-stand position (TASK)
+    s.climb_feet = 2.0        # feet on the platform top (TASK)
+    s.climb_stand = 10.0      # upright stand on top = the goal (TASK)
     return cfg
 
 
@@ -308,6 +309,9 @@ class G1ClimbAMP(g1_joystick.Joystick):
         rewards = super()._get_reward(
             data, action, info, metrics, done, first_contact, contact)
         base = data.qpos[0:3]
+        tgt = REF_BASE[-1]                                   # (y, z) at the stand
+        dist = jp.abs(base[1] - tgt[0]) + jp.abs(base[0])    # forward + lateral drift
+        rewards["climb_target"] = jp.exp(-3.0 * dist) + jp.exp(-6.0 * jp.abs(base[2] - tgt[1]))
         plat_h = 2.0 * data.geom_xpos[self._plat_gid, 2]
 
         def on_plat(gid):

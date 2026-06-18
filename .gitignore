@@ -28,3 +28,6 @@ models/
 .venv-rl/
 runs_climb/
 runs_oneleg/
+.venv-mjx/
+runs_amp_v2/
+runs_amp/

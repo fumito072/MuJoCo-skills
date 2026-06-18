@@ -58,8 +58,11 @@ def climb_config():
     s.orientation = -0.5
     s.alive = 0.2
     # NO climb_mimic — AMP replaces per-frame tracking with the discriminator style.
-    s.climb_feet = 0.5        # both feet on the platform top (TASK)
-    s.climb_stand = 2.0       # brief upright stand on top = the goal (TASK)
+    # TASK rewards BOOSTED (v2): v1 style(~0.4/step) drowned a tiny task(~0.05) => 0/20.
+    # climb_target is a DENSE goal-approach term so the climb is actually PURSUED.
+    s.climb_target = 10.0     # dense: approach the platform-stand position (TASK)
+    s.climb_feet = 2.0        # feet on the platform top (TASK)
+    s.climb_stand = 10.0      # upright stand on top = the goal (TASK)
     return cfg
 
 
@@ -202,6 +205,11 @@ class G1ClimbAMP(g1_joystick.Joystick):
         rewards = super()._get_reward(
             data, action, info, metrics, done, first_contact, contact)
         base = data.qpos[0:3]
+        # DENSE goal-approach (TASK): reward being near the platform-stand position so
+        # the climb is pursued from the floor (v1 had only sparse on-platform reward).
+        tgt = REF_BASE[-1]                                   # (y, z) at the stand
+        dist = jp.abs(base[1] - tgt[0]) + jp.abs(base[0])    # forward + lateral drift
+        rewards["climb_target"] = jp.exp(-3.0 * dist) + jp.exp(-6.0 * jp.abs(base[2] - tgt[1]))
         plat_h = 2.0 * data.geom_xpos[self._plat_gid, 2]
 
         def on_plat(gid):
